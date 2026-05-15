@@ -181,20 +181,27 @@ def index():
 @app.route("/attendance_stats")
 def attendance_stats():
     import pandas as pd
-    # Fetch all logs
-    logs = list(db.attendance.find({}, {"timestamp": 1, "_id": 0}))
-    df = pd.DataFrame(logs)
+    from datetime import date, timedelta
     
-    if df.empty:
-        from datetime import date, timedelta
-        days = [(datetime.date.today() - datetime.timedelta(days=i)).strftime("%d-%b") for i in range(29, -1, -1)]
+    # Safe fallback for days
+    days = [(datetime.date.today() - datetime.timedelta(days=i)).strftime("%d-%b") for i in range(29, -1, -1)]
+    
+    try:
+        # Fetch all logs
+        logs = list(db.attendance.find({}, {"timestamp": 1, "_id": 0}))
+        df = pd.DataFrame(logs)
+        
+        if df.empty:
+            return jsonify({"dates": days, "counts": [0]*30})
+        
+        df['date'] = pd.to_datetime(df['timestamp']).dt.date
+        last_30 = [(datetime.date.today() - datetime.timedelta(days=i)) for i in range(29, -1, -1)]
+        counts = [int(df[df['date'] == d].shape[0]) for d in last_30]
+        dates = [d.strftime("%d-%b") for d in last_30]
+        return jsonify({"dates": dates, "counts": counts})
+    except Exception as e:
+        app.logger.error("DB Error in attendance_stats: %s", e)
         return jsonify({"dates": days, "counts": [0]*30})
-    
-    df['date'] = pd.to_datetime(df['timestamp']).dt.date
-    last_30 = [(datetime.date.today() - datetime.timedelta(days=i)) for i in range(29, -1, -1)]
-    counts = [int(df[df['date'] == d].shape[0]) for d in last_30]
-    dates = [d.strftime("%d-%b") for d in last_30]
-    return jsonify({"dates": dates, "counts": counts})
 
 # -------- Add employee --------
 @app.route("/add_employee", methods=["GET", "POST"])
