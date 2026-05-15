@@ -57,17 +57,24 @@ write_train_status({"running": False, "progress": 0, "message": "No training yet
 
 # ---------- Network settings & verification helpers ----------
 def get_network_config():
-    config = db.settings.find_one({"_id": "network_config"})
-    if not config:
-        # Default: disabled, allowing all.
-        config = {
-            "_id": "network_config",
-            "wifi_restriction_enabled": False,
-            "allowed_subnets": "192.168.1, 192.168.0", # default example local subnets
-            "bypass_localhost": True
-        }
-        db.settings.insert_one(config)
-    return config
+    default_config = {
+        "_id": "network_config",
+        "wifi_restriction_enabled": False,
+        "allowed_subnets": "192.168.1, 192.168.0", # default example local subnets
+        "bypass_localhost": True
+    }
+    try:
+        config = db.settings.find_one({"_id": "network_config"})
+        if not config:
+            config = default_config
+            try:
+                db.settings.insert_one(config)
+            except Exception:
+                pass
+        return config
+    except Exception as e:
+        app.logger.error("DB Error in get_network_config: %s", e)
+        return default_config
 
 def check_wifi_access(client_ip):
     config = get_network_config()
@@ -405,30 +412,30 @@ def recognize_face():
 def attendance_record():
     period = request.args.get("period", "all")
     query = {}
-    
-    if period == "daily":
-        today = datetime.date.today().isoformat()
-        # simplistic prefix match since we format as ISO
-        query["timestamp"] = {"$regex": f"^{today}"}
-    elif period in ["weekly", "monthly"]:
-        days = 7 if period == "weekly" else 30
-        start_dt = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat()
-        query["timestamp"] = {"$gte": start_dt}
-
-    cursor = db.attendance.find(query).sort("timestamp", -1).limit(5000)
-    
-    # Map to array compatible with existing Jinja template layout:
-    # template expected indices: 0:id, 1:employee_id, 2:name, 3:timestamp, 4:status
     formatted_records = []
-    for r in cursor:
-        formatted_records.append([
-            r.get("id"),
-            r.get("employee_id"),
-            r.get("name"),
-            r.get("timestamp"),
-            r.get("status", "Check In")
-        ])
     
+    try:
+        if period == "daily":
+            today = datetime.date.today().isoformat()
+            query["timestamp"] = {"$regex": f"^{today}"}
+        elif period in ["weekly", "monthly"]:
+            days = 7 if period == "weekly" else 30
+            start_dt = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat()
+            query["timestamp"] = {"$gte": start_dt}
+
+        cursor = db.attendance.find(query).sort("timestamp", -1).limit(5000)
+        
+        for r in cursor:
+            formatted_records.append([
+                r.get("id"),
+                r.get("employee_id"),
+                r.get("name"),
+                r.get("timestamp"),
+                r.get("status", "Check In")
+            ])
+    except Exception as e:
+        app.logger.error("DB Error in attendance_record: %s", e)
+        
     return render_template("attendance_record.html", records=formatted_records, period=period)
 
 # -------- CSV download --------
@@ -447,12 +454,15 @@ def download_csv():
 
 @app.route("/users")
 def users_dashboard_page():
-    cursor = db.employees.find({}).sort("id", -1)
     employees = []
-    for emp in cursor:
-        # Remove Mongo internal ObjectId from raw passing to prevent serialization crashes
-        emp.pop('_id', None) 
-        employees.append(emp)
+    try:
+        cursor = db.employees.find({}).sort("id", -1)
+        for emp in cursor:
+            # Remove Mongo internal ObjectId from raw passing to prevent serialization crashes
+            emp.pop('_id', None) 
+            employees.append(emp)
+    except Exception as e:
+        app.logger.error("DB Error in users_dashboard_page: %s", e)
     return render_template("users.html", employees=employees)
 
 # -------- Employees Update API --------
@@ -522,55 +532,60 @@ def payroll_page():
     if not month_str:
         month_str = datetime.datetime.now().strftime("%Y-%m")
     
-    # We want attendance records matching this month prefix in ISO format
-    query = {"timestamp": {"$regex": f"^{month_str}"}}
-    attendance_records = list(db.attendance.find(query).sort([("employee_id", 1), ("timestamp", 1)]))
-    
-    employees = list(db.employees.find({}))
-    emp_map = {emp["id"]: emp for emp in employees}
-    
-    # Calculate hours per employee
-    # Group by employee
-    emp_attendance = {}
-    for r in attendance_records:
-        eid = r["employee_id"]
-        if eid not in emp_attendance:
-            emp_attendance[eid] = []
-        emp_attendance[eid].append(r)
-        
     payroll_data = []
-    for emp in employees:
-        eid = emp["id"]
-        records = emp_attendance.get(eid, [])
-        total_seconds = 0
-        last_checkin_time = None
+    
+    try:
+        # We want attendance records matching this month prefix in ISO format
+        query = {"timestamp": {"$regex": f"^{month_str}"}}
+        attendance_records = list(db.attendance.find(query).sort([("employee_id", 1), ("timestamp", 1)]))
         
-        for r in records:
-            status = r.get("status", "")
-            ts = datetime.datetime.fromisoformat(r["timestamp"])
-            if status in ["Check In", "Late Check In"]:
-                last_checkin_time = ts
-            elif status == "Check Out":
-                if last_checkin_time:
-                    # check if same day
-                    if last_checkin_time.date() == ts.date():
-                        delta = (ts - last_checkin_time).total_seconds()
-                        if delta > 0:
-                            total_seconds += delta
-                    last_checkin_time = None
-                    
-        total_hours = total_seconds / 3600.0
-        rate = emp.get("hourly_rate", 0.0)
-        salary = total_hours * rate
+        employees = list(db.employees.find({}))
+        emp_map = {emp["id"]: emp for emp in employees}
         
-        payroll_data.append({
-            "id": eid,
-            "name": emp["name"],
-            "emp_id": emp["emp_id"],
-            "hourly_rate": rate,
-            "total_hours": round(total_hours, 2),
-            "salary": round(salary, 2)
-        })
+        # Calculate hours per employee
+        # Group by employee
+        emp_attendance = {}
+        for r in attendance_records:
+            eid = r["employee_id"]
+            if eid not in emp_attendance:
+                emp_attendance[eid] = []
+            emp_attendance[eid].append(r)
+            
+        for emp in employees:
+            eid = emp["id"]
+            records = emp_attendance.get(eid, [])
+            total_seconds = 0
+            last_checkin_time = None
+            
+            for r in records:
+                status = r.get("status", "")
+                ts = datetime.datetime.fromisoformat(r["timestamp"])
+                if status in ["Check In", "Late Check In"]:
+                    last_checkin_time = ts
+                elif status == "Check Out":
+                    if last_checkin_time:
+                        # check if same day
+                        if last_checkin_time.date() == ts.date():
+                            delta = (ts - last_checkin_time).total_seconds()
+                            if delta > 0:
+                                total_seconds += delta
+                        last_checkin_time = None
+                        
+            total_hours = total_seconds / 3600.0
+            rate = emp.get("hourly_rate", 0.0)
+            salary = total_hours * rate
+            
+            payroll_data.append({
+                "id": eid,
+                "name": emp["name"],
+                "emp_id": emp["emp_id"],
+                "hourly_rate": rate,
+                "total_hours": round(total_hours, 2),
+                "salary": round(salary, 2)
+            })
+    except Exception as e:
+        app.logger.error("DB Error in payroll_page: %s", e)
+        
     return render_template("payroll.html", payroll_data=payroll_data, month_str=month_str)
 
 @app.route("/download_payroll_csv", methods=["GET"])
@@ -631,90 +646,94 @@ def performance_page():
     if not month_str:
         month_str = datetime.datetime.now().strftime("%Y-%m")
     
-    # Get all records for selected month
-    query = {"timestamp": {"$regex": f"^{month_str}"}}
-    attendance_records = list(db.attendance.find(query).sort("timestamp", 1))
-    
-    employees = list(db.employees.find({}))
-    
-    emp_attendance = {}
-    for r in attendance_records:
-        eid = r["employee_id"]
-        if eid not in emp_attendance:
-            emp_attendance[eid] = []
-        emp_attendance[eid].append(r)
-        
     performance_data = []
-    for emp in employees:
-        eid = emp["id"]
-        records = emp_attendance.get(eid, [])
-        
-        total_seconds = 0
-        last_checkin_time = None
-        
-        days_present = set()
-        days_late = set()
-        
-        for r in records:
-            status = r.get("status", "")
-            ts = datetime.datetime.fromisoformat(r["timestamp"])
-            day_str = ts.date().isoformat()
-            
-            if status in ["Check In", "Late Check In"]:
-                days_present.add(day_str)
-                if status == "Late Check In":
-                    days_late.add(day_str)
-                last_checkin_time = ts
-            elif status == "Check Out":
-                if last_checkin_time and last_checkin_time.date() == ts.date():
-                    delta = (ts - last_checkin_time).total_seconds()
-                    if delta > 0:
-                        total_seconds += delta
-                last_checkin_time = None
-                
-        total_hours = total_seconds / 3600.0
-        num_days_present = len(days_present)
-        num_days_late = len(days_late)
-        num_days_on_time = max(0, num_days_present - num_days_late)
-        
-        punctuality_rate = (num_days_on_time / num_days_present * 100) if num_days_present > 0 else 0.0
-        avg_hours = (total_hours / num_days_present) if num_days_present > 0 else 0.0
-        
-        # Score weight: 60% Punctuality, 40% Work Hours (Target 8 hrs/day)
-        punct_score = punctuality_rate
-        hours_score = min(100.0, (avg_hours / 8.0) * 100) if num_days_present > 0 else 0.0
-        final_score = (0.6 * punct_score) + (0.4 * hours_score)
-        
-        if num_days_present == 0:
-            grade = "N/A"
-        elif final_score >= 90:
-            grade = "A+"
-        elif final_score >= 80:
-            grade = "A"
-        elif final_score >= 70:
-            grade = "B"
-        elif final_score >= 60:
-            grade = "C"
-        else:
-            grade = "D"
-            
-        performance_data.append({
-            "id": eid,
-            "name": emp.get("name", "Unknown"),
-            "emp_id": emp.get("emp_id", "-"),
-            "designation": emp.get("designation", "-"),
-            "total_days": num_days_present,
-            "on_time_days": num_days_on_time,
-            "late_days": num_days_late,
-            "punctuality_rate": round(punctuality_rate, 1),
-            "total_hours": round(total_hours, 1),
-            "avg_hours": round(avg_hours, 1),
-            "score": round(final_score, 1),
-            "grade": grade
-        })
-        
-    performance_data.sort(key=lambda x: x["score"], reverse=True)
     
+    try:
+        # Get all records for selected month
+        query = {"timestamp": {"$regex": f"^{month_str}"}}
+        attendance_records = list(db.attendance.find(query).sort("timestamp", 1))
+        
+        employees = list(db.employees.find({}))
+        
+        emp_attendance = {}
+        for r in attendance_records:
+            eid = r["employee_id"]
+            if eid not in emp_attendance:
+                emp_attendance[eid] = []
+            emp_attendance[eid].append(r)
+            
+        for emp in employees:
+            eid = emp["id"]
+            records = emp_attendance.get(eid, [])
+            
+            total_seconds = 0
+            last_checkin_time = None
+            
+            days_present = set()
+            days_late = set()
+            
+            for r in records:
+                status = r.get("status", "")
+                ts = datetime.datetime.fromisoformat(r["timestamp"])
+                day_str = ts.date().isoformat()
+                
+                if status in ["Check In", "Late Check In"]:
+                    days_present.add(day_str)
+                    if status == "Late Check In":
+                        days_late.add(day_str)
+                    last_checkin_time = ts
+                elif status == "Check Out":
+                    if last_checkin_time and last_checkin_time.date() == ts.date():
+                        delta = (ts - last_checkin_time).total_seconds()
+                        if delta > 0:
+                            total_seconds += delta
+                    last_checkin_time = None
+                    
+            total_hours = total_seconds / 3600.0
+            num_days_present = len(days_present)
+            num_days_late = len(days_late)
+            num_days_on_time = max(0, num_days_present - num_days_late)
+            
+            punctuality_rate = (num_days_on_time / num_days_present * 100) if num_days_present > 0 else 0.0
+            avg_hours = (total_hours / num_days_present) if num_days_present > 0 else 0.0
+            
+            # Score weight: 60% Punctuality, 40% Work Hours (Target 8 hrs/day)
+            punct_score = punctuality_rate
+            hours_score = min(100.0, (avg_hours / 8.0) * 100) if num_days_present > 0 else 0.0
+            final_score = (0.6 * punct_score) + (0.4 * hours_score)
+            
+            if num_days_present == 0:
+                grade = "N/A"
+            elif final_score >= 90:
+                grade = "A+"
+            elif final_score >= 80:
+                grade = "A"
+            elif final_score >= 70:
+                grade = "B"
+            elif final_score >= 60:
+                grade = "C"
+            else:
+                grade = "D"
+                
+            performance_data.append({
+                "id": eid,
+                "name": emp.get("name", "Unknown"),
+                "emp_id": emp.get("emp_id", "-"),
+                "designation": emp.get("designation", "-"),
+                "total_days": num_days_present,
+                "on_time_days": num_days_on_time,
+                "late_days": num_days_late,
+                "punctuality_rate": round(punctuality_rate, 1),
+                "total_hours": round(total_hours, 1),
+                "avg_hours": round(avg_hours, 1),
+                "score": round(final_score, 1),
+                "grade": grade
+            })
+            
+        performance_data.sort(key=lambda x: x["score"], reverse=True)
+    except Exception as e:
+        app.logger.error("DB Error in performance_page: %s", e)
+        
     return render_template("performance.html", data=performance_data, month_str=month_str)
 
 @app.route("/api/employee_image/<int:eid>")
@@ -780,25 +799,28 @@ def api_sidebar_employee(direction, current_eid):
 # -------- System Settings --------
 @app.route("/settings", methods=["GET", "POST"])
 def settings_page():
+    message = None
     if request.method == "POST":
         wifi_enabled = request.form.get("wifi_restriction_enabled") == "on"
         allowed_subnets = request.form.get("allowed_subnets", "").strip()
         bypass_localhost = request.form.get("bypass_localhost") == "on"
         
-        db.settings.update_one(
-            {"_id": "network_config"},
-            {
-                "$set": {
-                    "wifi_restriction_enabled": wifi_enabled,
-                    "allowed_subnets": allowed_subnets,
-                    "bypass_localhost": bypass_localhost
-                }
-            },
-            upsert=True
-        )
-        message = "Settings updated successfully!"
-    else:
-        message = None
+        try:
+            db.settings.update_one(
+                {"_id": "network_config"},
+                {
+                    "$set": {
+                        "wifi_restriction_enabled": wifi_enabled,
+                        "allowed_subnets": allowed_subnets,
+                        "bypass_localhost": bypass_localhost
+                    }
+                },
+                upsert=True
+            )
+            message = "Settings updated successfully!"
+        except Exception as e:
+            app.logger.error("DB Error updating settings: %s", e)
+            message = "Error: Could not connect to database to save settings."
         
     config = get_network_config()
     client_ip = request.remote_addr
