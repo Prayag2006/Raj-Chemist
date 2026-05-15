@@ -5,6 +5,14 @@
 {% block header_title %}Log History{% endblock %}
 
 {% block content %}
+<style>
+  .border-late { border-color: #D9534F !important; }
+  .border-checkin { border-color: #50B948 !important; }
+  .border-checkout { border-color: #F5AF23 !important; }
+  .text-late { color: #D9534F !important; }
+  .text-checkin { color: #50B948 !important; }
+  .text-checkout { color: #F5AF23 !important; }
+</style>
 <div class="action-bar">
   <div class="pill-input-group">
     <span>Period: <strong>{{ period | capitalize }}</strong></span>
@@ -41,18 +49,21 @@
         <td style="width: 50%;">
             <div class="time-block-container">
                 {% if r[4] == "Late Check In" %}
-                    {% set color = "#D9534F" %}
+                    {% set border_cls = "border-late" %}
+                    {% set text_cls = "text-late" %}
                     {% set icon = "fa-clock" %}
                 {% elif r[4] == "Check In" %}
-                    {% set color = "#50B948" %}
+                    {% set border_cls = "border-checkin" %}
+                    {% set text_cls = "text-checkin" %}
                     {% set icon = "fa-arrow-right-to-bracket" %}
                 {% else %}
-                    {% set color = "#F5AF23" %}
+                    {% set border_cls = "border-checkout" %}
+                    {% set text_cls = "text-checkout" %}
                     {% set icon = "fa-arrow-right-from-bracket" %}
                 {% endif %}
-                <div class="time-block" style="left: 20%; width: 60%; border-color: {{ color }};">
+                <div class="time-block {{ border_cls }}" style="left: 20%; width: 60%;">
                     <div class="block-details">
-                        <span class="block-hours"><i class="fa-solid {{ icon }} me-1" style="color:{{ color }}"></i> {{ r[4] if r[4] else 'Registered' }}</span>
+                        <span class="block-hours"><i class="fa-solid {{ icon }} me-1 {{ text_cls }}"></i> {{ r[4] if r[4] else 'Registered' }}</span>
                         <span class="block-sub">Biometric Auto Verification</span>
                     </div>
                 </div>
