@@ -44,8 +44,11 @@ def get_next_sequence(counter_name):
 
 # ---------- Train status helpers ----------
 def write_train_status(status_dict):
-    with open(TRAIN_STATUS_FILE, "w") as f:
-        json.dump(status_dict, f)
+    try:
+        with open(TRAIN_STATUS_FILE, "w") as f:
+            json.dump(status_dict, f)
+    except Exception:
+        pass
 
 def read_train_status():
     if not os.path.exists(TRAIN_STATUS_FILE):
@@ -53,7 +56,8 @@ def read_train_status():
     with open(TRAIN_STATUS_FILE, "r") as f:
         return json.load(f)
 
-write_train_status({"running": False, "progress": 0, "message": "No training yet."})
+# Disabled writing to disk on startup to prevent crashes on read-only Vercel filesystem
+# write_train_status({"running": False, "progress": 0, "message": "No training yet."})
 
 # ---------- Network settings & verification helpers ----------
 def get_network_config():
