@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Payroll & Salary{% endblock %}
+
+{% block header_title %}Payroll Calculation{% endblock %}
+
+{% block content %}
+<div class="action-bar">
+    <h5 class="mb-0"><i class="fa-solid fa-money-check-dollar me-2 text-muted"></i>Monthly Payroll</h5>
+    <div class="action-buttons align-items-center">
+        <form class="d-flex gap-2 align-items-center mb-0" method="GET" action="/payroll">
+            <input type="month" class="form-control" name="month" value="{{ month_str }}" style="height: 38px; padding: 4px 12px;" required>
+            <button type="submit" class="btn-mock btn-mock-primary d-inline-flex align-items-center" style="height: 38px;"><i class="fa-solid fa-filter me-1"></i> Filter</button>
+        </form>
+        <a href="/download_payroll_csv?month={{ month_str }}" class="btn-mock btn-mock-outline d-inline-flex align-items-center" style="height: 38px; border-color: var(--color-green); color: var(--color-green);">
+            <i class="fa-solid fa-file-csv me-1"></i> Export Report
+        </a>
+    </div>
+</div>
+
+<div class="timeline-table-wrapper mt-3">
+    <table class="timeline-table">
+        <thead>
+            <tr>
+                <th>Member</th>
+                <th>Employee ID</th>
+                <th class="text-end">Hourly Rate</th>
+                <th class="text-end">Total Hours</th>
+                <th class="text-end">Calculated Salary</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in payroll_data %}
+            <tr>
+                <td style="font-weight: 600;">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="bg-light rounded-circle d-flex justify-content-center align-items-center" style="width:32px;height:32px;border:1px solid #eee;">
+                            <i class="fa-regular fa-user text-secondary"></i>
+                        </div>
+                        <span>{{ row.name }}</span>
+                    </div>
+                </td>
+                <td class="text-muted">#{{ row.emp_id }}</td>
+                <td class="text-end text-muted">${{ "%.2f"|format(row.hourly_rate) }}/hr</td>
+                <td class="text-end fw-bold">{{ "%.2f"|format(row.total_hours) }} hrs</td>
+                <td class="text-end text-success fw-bold">${{ "%.2f"|format(row.salary) }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-center p-5 text-muted">No attendance data found for this period.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-4">
+    <div class="modern-card p-4">
+        <h6 class="fw-bold mb-3"><i class="fa-solid fa-circle-info text-primary me-2"></i> How is this calculated?</h6>
+        <p class="text-muted small mb-0">
+            Working hours are computed by taking the time difference between an employee's "Check In" and the subsequent "Check Out" on the same day.
+            If an employee only checks in without a check out, those hours may not be counted automatically until a manual adjustment is made.
+            The final salary is the product of the total calculated hours and the employee's configured hourly rate.
+        </p>
+    </div>
+</div>
+{% endblock %}

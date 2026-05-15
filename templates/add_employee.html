@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Register Employee{% endblock %}
+
+{% block header_title %}Personnel Registration{% endblock %}
+
+{% block content %}
+<div class="row g-4 justify-content-center">
+  <div class="col-xl-10">
+    <div class="modern-card">
+      <h5 class="mb-3 border-bottom pb-2">Register New Profile</h5>
+      <form id="employeeForm">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Full Name</label>
+            <input class="form-control" name="name" placeholder="e.g. Jane Doe" required>
+          </div>
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Unique ID</label>
+            <input class="form-control" name="emp_id" placeholder="EMP-XXX" required>
+          </div>
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Department</label>
+            <input class="form-control" name="dept" placeholder="Engineering, Sales...">
+          </div>
+          <div class="col-md-6">
+            <label class="small fw-bold text-muted">Job Title</label>
+            <input class="form-control" name="desig" placeholder="Product Designer">
+          </div>
+          <div class="col-md-4">
+            <label class="small fw-bold text-muted">Start Date</label>
+            <input class="form-control" type="date" name="joining">
+          </div>
+          <div class="col-md-4">
+            <label class="small fw-bold text-muted">Shift Start Time</label>
+            <input class="form-control" type="time" name="shift_start" value="09:00">
+          </div>
+          <div class="col-md-4">
+            <label class="small fw-bold text-muted">Hourly Rate ($)</label>
+            <input class="form-control" type="number" step="0.01" name="hourly_rate" placeholder="e.g. 25.50">
+          </div>
+        </div>
+        
+        <div class="mt-4 d-flex flex-wrap gap-2">
+          <button id="saveInfoBtn" type="submit" class="btn-mock btn-mock-primary"><i class="fa-solid fa-floppy-disk me-1"></i> Save Profile Data</button>
+          <button id="startCaptureBtn" type="button" class="btn-mock btn-mock-outline" disabled><i class="fa-solid fa-camera me-1"></i> Launch Camera</button>
+          <button id="addEmployeeBtn" type="button" class="btn-mock btn-mock-outline" disabled style="border-color:var(--color-green); color:var(--color-green);">Finish Setup</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modern-card text-center">
+       <h5>Facial Enrollment Feed</h5>
+       <div class="position-relative d-inline-block mb-3" style="border: 1px solid #eee; border-radius:12px; overflow:hidden; background-color:#000;">
+           <video id="video" width="560" height="420" autoplay muted></video>
+           <div style="position:absolute; top:15px; right:15px;" class="badge bg-dark bg-opacity-75">LIVE</div>
+       </div>
+       
+       <div class="mx-auto" style="max-width:560px;">
+           <div id="captureStatus" class="small text-muted text-start mb-1">Status: Idle waiting for profile lock</div>
+           <div class="progress" style="height:10px; background-color:#eee; border-radius:20px;">
+             <div id="progressBar" class="progress-bar bg-success" style="width:0%; border-radius:20px;"></div>
+           </div>
+       </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/camera_add_employee.js') }}"></script>
+{% endblock %}

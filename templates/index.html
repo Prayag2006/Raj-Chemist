@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Attendance Dashboard{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block header_title %}System Overview{% endblock %}
+
+{% block content %}
+<div class="action-bar">
+  <div class="pill-input-group">
+    <span>Time period: <strong>1st Jun - 31st Jul 2022</strong></span>
+    <i class="fa-regular fa-calendar"></i>
+  </div>
+</div>
+
+<!-- Hour breakdown section matching the screenshot aesthetics -->
+<div class="hour-breakdown-section">
+  <div class="hb-label-group">
+    <div>
+      <span class="hb-title">Total Check-ins (Month)</span>
+      <span class="hb-value" id="totalCheckins">...</span>
+    </div>
+    <div class="hb-legend">
+      <span><span class="legend-dot bg-approved"></span> On Time</span>
+      <span><span class="legend-dot bg-overtime"></span> Late</span>
+      <span><span class="legend-dot bg-pending"></span> Absent</span>
+    </div>
+  </div>
+  <div class="stacked-progress">
+    <div class="progress-segment bg-approved" style="width: 75%;"></div>
+    <div class="progress-segment bg-overtime" style="width: 15%;"></div>
+    <div class="progress-segment bg-pending" style="width: 10%;"></div>
+  </div>
+</div>
+
+<!-- Controls with Quick Actions in that style -->
+<div class="control-row">
+  <div class="view-toggle">
+    <button class="view-btn active"><i class="fa-solid fa-list"></i> Summary</button>
+    <button class="view-btn"><i class="fa-solid fa-chart-line"></i> Analytics</button>
+  </div>
+  <div class="action-buttons">
+    <a href="/add_employee" class="btn-mock btn-mock-outline">Register New</a>
+    <a href="/mark_attendance" class="btn-mock btn-mock-primary">Start Scanner</a>
+  </div>
+</div>
+
+<div class="row g-4 mt-1">
+  <div class="col-lg-4">
+    <div class="modern-card">
+      <h5>Face Recognition Engine</h5>
+      <p class="small text-muted mb-3">Ensure the model is up-to-date after registering new employee face data.</p>
+      
+      <div class="mb-3">
+        <div class="progress" style="height:12px; background-color:#f1f1f1; border-radius:10px;">
+          <div id="trainProgress" class="progress-bar" style="width: 0%; background-color: var(--color-primary);"></div>
+        </div>
+        <div id="trainMsg" class="small text-muted mt-2">System Ready</div>
+      </div>
+      
+      <button id="trainBtn" class="btn btn-dark w-100" style="border-radius:4px; font-size:13px; padding:10px;">Re-train Model</button>
+    </div>
+  </div>
+  
+  <div class="col-lg-8">
+    <div class="modern-card">
+      <h5>Attendance Volume (Last 30 Days)</h5>
+      <div class="chart-container" style="position:relative; height:220px; width:100%;">
+        <canvas id="attendanceChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="static/js/dashboard.js"></script>
+<script>
+  // Fetch count for total summary logic
+  fetch('/attendance_stats')
+  .then(res => res.json())
+  .then(data => {
+    const sum = data.counts.reduce((a, b) => a + b, 0);
+    document.getElementById('totalCheckins').innerText = sum + " hrs equivalent";
+  });
+</script>
+{% endblock %}

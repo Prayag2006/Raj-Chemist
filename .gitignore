@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases
+*.db
+*.sqlite3
+
+# Virtual Environments
+venv/
+env/
+.venv/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# Scratch
+scratch/

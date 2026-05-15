@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Employee Performance Analytics{% endblock %}
+
+{% block header_title %}Performance Analytics{% endblock %}
+
+{% block content %}
+<div class="action-bar">
+  <div class="pill-input-group">
+    <span>Viewing Period: <strong>{{ month_str }}</strong></span>
+    <i class="fa-regular fa-calendar"></i>
+  </div>
+  <div class="action-buttons">
+    <form action="/performance" method="GET" class="d-flex gap-2 align-items-center">
+      <input type="month" name="month" value="{{ month_str }}" class="form-control form-control-sm" style="width:180px;">
+      <button type="submit" class="btn btn-dark btn-sm px-3" style="border-radius:4px;">Load</button>
+    </form>
+  </div>
+</div>
+
+<!-- Leaderboard / Top Performer Feature Banner -->
+{% if data and data[0].score > 0 %}
+<div class="modern-card mb-4" style="background: linear-gradient(135deg, #2c3e50, #34495e); color: #fff; border: none; position: relative; overflow: hidden;">
+  <div style="position: absolute; right: -20px; top: -20px; font-size: 150px; color: rgba(255,255,255,0.04); pointer-events: none;">
+    <i class="fa-solid fa-trophy"></i>
+  </div>
+  <div class="row align-items-center position-relative" style="z-index: 2;">
+    <div class="col-md-8">
+      <span class="badge bg-warning text-dark mb-2" style="font-weight: 600; letter-spacing: 1px; font-size: 10px;">MONTHLY CHAMPION</span>
+      <h3 style="font-family: var(--font-family-serif); font-size: 32px; margin-bottom: 5px;">{{ data[0].name }}</h3>
+      <p class="mb-0" style="color: rgba(255,255,255,0.75); font-size: 13px;">
+        Top performer for {{ month_str }} with a spectacular rating of <strong>{{ data[0].score }}%</strong>
+        and an average shift of <strong>{{ data[0].avg_hours }} hours/day</strong>.
+      </p>
+    </div>
+    <div class="col-md-4 text-md-end mt-3 mt-md-0">
+      <div class="d-inline-block text-center" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 10px 25px; border-radius: 8px;">
+        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; opacity: 0.8;">Performance Grade</div>
+        <div style="font-size: 36px; font-weight: 800; color: var(--color-primary); line-height: 1;">{{ data[0].grade }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Detailed Performance Table -->
+<div class="modern-card">
+  <h5 class="mb-3">Employee Performance Index</h5>
+  <div class="table-responsive">
+    <table class="timeline-table" style="width:100%; vertical-align: middle;">
+      <thead>
+        <tr>
+          <th style="width: 60px;">Rank</th>
+          <th>Employee Name</th>
+          <th class="text-center">Work Days</th>
+          <th class="text-center">On-Time / Late</th>
+          <th class="text-center">Punctuality</th>
+          <th class="text-center">Avg Hours</th>
+          <th class="text-center">Overall Score</th>
+          <th class="text-center">Grade</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if data %}
+          {% for row in data %}
+          <tr>
+            <td style="font-weight: 700; color: #555;">
+              {% if loop.index == 1 %}<i class="fa-solid fa-medal" style="color: #FFD700; font-size: 18px;"></i>{% elif loop.index == 2 %}<i class="fa-solid fa-medal" style="color: #C0C0C0; font-size: 18px;"></i>{% elif loop.index == 3 %}<i class="fa-solid fa-medal" style="color: #CD7F32; font-size: 18px;"></i>{% else %}#{{ loop.index }}{% endif %}
+            </td>
+            <td>
+              <div class="d-flex align-items-center gap-3">
+                <img src="https://ui-avatars.com/api/?name={{ row.name|urlencode }}&background=random&size=32" alt="{{ row.name }}" class="rounded-circle" style="width:32px; height:32px;">
+                <div>
+                  <div style="font-weight: 600; color: #222;">{{ row.name }}</div>
+                  <div class="text-muted" style="font-size: 11px;">{{ row.emp_id }} &bull; {{ row.designation }}</div>
+                </div>
+              </div>
+            </td>
+            <td class="text-center" style="font-weight: 600;">{{ row.total_days }} days</td>
+            <td class="text-center">
+              <span class="badge bg-light text-success border" style="font-size: 11px;">{{ row.on_time_days }}</span>
+              <span class="text-muted mx-1">/</span>
+              <span class="badge bg-light text-danger border" style="font-size: 11px;">{{ row.late_days }}</span>
+            </td>
+            <td class="text-center">
+              <div class="d-flex align-items-center justify-content-center gap-2">
+                <div class="progress" style="width: 60px; height: 6px; background: #e9ecef; margin: 0;">
+                  <div class="progress-bar bg-success" role="progressbar" style="width: {{ row.punctuality_rate }}%"></div>
+                </div>
+                <span style="font-size: 12px; font-weight: 600;">{{ row.punctuality_rate }}%</span>
+              </div>
+            </td>
+            <td class="text-center" style="font-weight: 600;">{{ row.avg_hours }}h / day</td>
+            <td class="text-center">
+              <div style="font-weight: 700; color: var(--color-text-dark); font-size: 14px;">
+                {{ row.score }}%
+              </div>
+            </td>
+            <td class="text-center">
+              <span class="badge {% if row.grade in ['A+','A'] %}bg-success{% elif row.grade == 'B' %}bg-primary{% elif row.grade == 'C' %}bg-warning text-dark{% else %}bg-danger{% endif %}" 
+                    style="font-size: 12px; padding: 5px 12px; width: 40px; text-align: center;">
+                {{ row.grade }}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="8" class="text-center py-5 text-muted">
+              <i class="fa-solid fa-chart-line d-block mb-2" style="font-size: 32px; opacity: 0.5;"></i>
+              No employee activity recorded for this month.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row mt-2">
+  <div class="col-md-12">
+    <div class="modern-card" style="background-color: #fcfcfc; border-style: dashed;">
+      <h6 class="mb-2" style="font-weight:600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;"><i class="fa-solid fa-circle-info me-1"></i> How Performance Is Calculated</h6>
+      <ul class="small text-muted mb-0 ps-3">
+        <li><strong>Punctuality Rate (60%):</strong> The percentage of days the employee was on-time compared to total present days.</li>
+        <li><strong>Working Hours Efficiency (40%):</strong> Calculated based on a target of 8.0 working hours per attendance day.</li>
+        <li><strong>Performance Index:</strong> Weighted average of both factors determines the final Rank and Alphabetical Grade.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

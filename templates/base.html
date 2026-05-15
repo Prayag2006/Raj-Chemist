@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Raj Chemist - Time & Attendance{% endblock %}</title>
+  
+  <!-- Bootstrap & Fonts -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- FontAwesome for Sidebar icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+
+  <!-- Top Yellow Ribbon Overlay (aesthetic) -->
+  <div class="top-ribbon"></div>
+
+  <div class="dashboard-container">
+    <!-- Sidebar Column 1: Primary Navigation -->
+    <aside class="sidebar-primary">
+      <div class="brand-logo" style="font-family: var(--font-family-serif); font-size: 32px;">
+        RC
+      </div>
+      <nav class="primary-nav">
+        <a href="/mark_attendance" class="nav-icon-link {% if '/mark_attendance' in request.path %}active{% endif %}" title="Start Attendance Scanner">
+          <i class="fa-solid fa-camera"></i>
+        </a>
+        <a href="/" class="nav-icon-link {% if request.path == '/' %}active{% endif %}" title="Dashboard Summary">
+          <i class="fa-solid fa-border-all"></i>
+        </a>
+        <a href="/attendance_record" class="nav-icon-link {% if '/attendance_record' in request.path %}active{% endif %}" title="Attendance Log">
+          <i class="fa-regular fa-calendar-check"></i>
+        </a>
+        <a href="/users" class="nav-icon-link {% if '/users' in request.path %}active{% endif %}" title="Employee Directory">
+          <i class="fa-regular fa-user"></i>
+        </a>
+        <a href="/payroll" class="nav-icon-link {% if '/payroll' in request.path %}active{% endif %}" title="Payroll & Salaries">
+            <i class="fa-solid fa-money-bill-wave"></i>
+        </a>
+        <a href="/performance" class="nav-icon-link {% if '/performance' in request.path %}active{% endif %}" title="Performance Reports">
+            <i class="fa-solid fa-tags"></i>
+        </a>
+        <a href="/settings" class="nav-icon-link {% if '/settings' in request.path %}active{% endif %}" title="System Settings">
+            <i class="fa-solid fa-gear"></i>
+        </a>
+        <a href="#" class="nav-icon-link" title="Logout / Exit">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Sidebar Column 2: Secondary Details (Profile Stats) -->
+    <aside class="sidebar-secondary">
+      <!-- Business Branding -->
+      <div class="pb-2 mb-4 text-center border-bottom">
+        <h3 style="font-family: var(--font-family-serif); font-size: 22px; letter-spacing: 0.5px; font-weight: normal; margin: 0; color: var(--color-text-dark);">
+          RAJ <span style="color: var(--color-primary); font-weight: bold;">CHEMIST</span>
+        </h3>
+      </div>
+
+      <div class="profile-card">
+        <div class="avatar-wrapper">
+          <img src="{{ url_for('employee_image', eid=sb_eid) if sb_eid else ('https://ui-avatars.com/api/?name=' + (sb_name|urlencode) + '&background=random') }}" onerror="this.onerror=null; this.src='https://ui-avatars.com/api/?name=' + encodeURIComponent(document.getElementById('sidebar_name').innerText) + '&background=random';" alt="Profile" id="sidebar_avatar">
+          <span class="badge bg-success badge-pill status-label">Active</span>
+        </div>
+        <h4 class="profile-name">
+          <i class="fa-solid fa-chevron-left small-chevron" style="cursor:pointer;" onclick="changeSidebarEmployee('prev')"></i> 
+          <span id="sidebar_name">{{ sb_name|default('No Employee') }}</span> 
+          <i class="fa-solid fa-chevron-right small-chevron" style="cursor:pointer;" onclick="changeSidebarEmployee('next')"></i>
+        </h4>
+        <p class="profile-role" id="sidebar_role">{{ sb_role|default('Admin Dashboard') }}</p>
+      </div>
+
+      <div class="stat-summary">
+        <div class="stat-total">
+          <i class="fa-regular fa-clock"></i>
+          <span class="num" id="sidebar_total_hours">{{ sb_total_hours|default('0.00') }}</span>
+          <span class="lbl">Total hours</span>
+        </div>
+        <hr class="divider">
+        <div class="row g-3 stat-grid">
+          <div class="col-6">
+            <div class="stat-box">
+              <div class="val" id="sidebar_regular_hours">{{ sb_regular_hours|default('0') }} hrs</div>
+              <div class="key">Regular</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="stat-box">
+              <div class="val" id="sidebar_rate">{{ sb_rate|default('$0.00') }}</div>
+              <div class="key">Hourly Rate</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="stat-box">
+              <div class="val" id="sidebar_salary">{{ sb_salary|default('$0.00') }}</div>
+              <div class="key">Salary</div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="stat-box">
+              <div class="val" id="sidebar_dept">{{ sb_dept|default('-') }}</div>
+              <div class="key">Department</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Powered By Footer -->
+      <div class="mt-auto pt-3 text-center border-top" style="margin-top: auto !important;">
+        <div style="font-size: 9px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 500;">Powered By</div>
+        <div style="font-size: 11px; font-weight: 700; color: var(--color-text-dark); letter-spacing: 0.5px; margin-top: 2px; text-transform: uppercase;">KANSARA ENTERPRISES</div>
+      </div>
+    </aside>
+
+    <!-- Main Content Section -->
+    <main class="main-content">
+      <header class="main-header d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center">
+          <button class="btn-back" onclick="window.history.back()"><i class="fa-solid fa-arrow-left"></i></button>
+          <h1 class="page-title">{% block header_title %}Time & Attendance{% endblock %}</h1>
+        </div>
+        <!-- Mobile branding only visible when sidebar is hidden -->
+        <div class="d-md-none text-end ms-2" style="font-family: var(--font-family-serif); font-size: 18px; font-weight: normal; white-space: nowrap;">
+          <span style="color: var(--color-text-dark);">RAJ</span> <span style="color: var(--color-primary); font-weight: bold;">CHEMIST</span>
+        </div>
+      </header>
+
+      <div class="content-body">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <!-- Global Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js"></script>
+  
+  <script>
+  let currentSidebarEid = {{ sb_eid|default(0) }};
+  async function changeSidebarEmployee(direction) {
+      if (currentSidebarEid === 0) return;
+      try {
+          const res = await fetch(`/api/sidebar_employee/${direction}/${currentSidebarEid}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          
+          currentSidebarEid = data.eid;
+          document.cookie = "sidebar_eid=" + data.eid + "; path=/; max-age=86400"; // store for 1 day
+          
+          document.getElementById("sidebar_name").innerText = data.name;
+          document.getElementById("sidebar_role").innerText = data.role;
+          document.getElementById("sidebar_total_hours").innerText = data.total_hours;
+          document.getElementById("sidebar_regular_hours").innerText = data.regular_hours;
+          document.getElementById("sidebar_rate").innerText = data.rate;
+          document.getElementById("sidebar_salary").innerText = data.salary;
+          document.getElementById("sidebar_dept").innerText = data.dept;
+          
+          // Initials badge was removed from DOM
+          
+          const avatar = document.getElementById("sidebar_avatar");
+          avatar.onerror = function() {
+              this.onerror = null;
+              this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&background=random`;
+          };
+          avatar.src = `/api/employee_image/${data.eid}?t=${new Date().getTime()}`;
+      } catch (e) {
+          console.error(e);
+      }
+  }
+  </script>
+  
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>
