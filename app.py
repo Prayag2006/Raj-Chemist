@@ -165,6 +165,14 @@ def inject_sidebar_data():
         return default_sb
 
 # ---------- Routes ----------
+import traceback
+
+@app.errorhandler(500)
+def handle_500(e):
+    tb = traceback.format_exc()
+    app.logger.error("500 ERROR DETECTED: %s", tb)
+    return f"<h1>500 INTERNAL SERVER ERROR DEBUGINFO</h1><pre>{tb}</pre>", 500
+
 @app.route("/")
 def index():
     return render_template("index.html")
