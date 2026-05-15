@@ -13,9 +13,15 @@ import certifi
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(APP_DIR, "dataset")
-os.makedirs(DATASET_DIR, exist_ok=True)
+try:
+    os.makedirs(DATASET_DIR, exist_ok=True)
+except Exception:
+    pass
 
-TRAIN_STATUS_FILE = os.path.join(APP_DIR, "train_status.json")
+if os.environ.get("VERCEL"):
+    TRAIN_STATUS_FILE = "/tmp/train_status.json"
+else:
+    TRAIN_STATUS_FILE = os.path.join(APP_DIR, "train_status.json")
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
