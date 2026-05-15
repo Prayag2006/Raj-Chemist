@@ -1,0 +1,7 @@
+Flask
+pymongo
+certifi
+numpy
+opencv-python-headless
+scikit-learn
+pandas

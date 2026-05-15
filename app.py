@@ -20,8 +20,8 @@ TRAIN_STATUS_FILE = os.path.join(APP_DIR, "train_status.json")
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
 # ---------- MongoDB Setup ----------
-# Defaulting to local MongoDB since Atlas connection is currently restricted by IP whitelist.
-MONGO_URI = "mongodb://localhost:27017/"
+# Reads from Environment Variable for Cloud hosting (like Atlas), or defaults to local.
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
 client = MongoClient(MONGO_URI)
 db = client['attendance_system'] # Database Name
 
