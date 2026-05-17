@@ -17,7 +17,12 @@ document.getElementById("employeeForm").addEventListener("submit", async (e) => 
   const fd = new FormData(e.target);
   const res = await fetch("/add_employee", { method: "POST", body: fd });
   if (!res.ok) {
-    alert("Failed to save employee information.");
+    try {
+      const errJson = await res.json();
+      alert("Failed: " + errJson.error);
+    } catch(e) {
+      alert("Failed to save employee information. Server returned " + res.status);
+    }
     return;
   }
   const j = await res.json();

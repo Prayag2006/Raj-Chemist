@@ -219,41 +219,46 @@ def attendance_stats():
 def add_employee():
     if request.method == "GET":
         return render_template("add_employee.html")
-    data = request.form
-    name = data.get("name", "").strip()
-    emp_id = data.get("emp_id", "").strip()
-    dept = data.get("dept", "").strip()
-    desig = data.get("desig", "").strip()
-    joining = data.get("joining", "").strip()
-    shift_start = data.get("shift_start", "09:00").strip()
-    if not name:
-        return jsonify({"error": "name required"}), 400
-
-    hourly_rate = data.get("hourly_rate", "0").strip()
+    
     try:
-        hourly_rate = float(hourly_rate)
-    except:
-        hourly_rate = 0.0
+        data = request.form
+        name = data.get("name", "").strip()
+        emp_id = data.get("emp_id", "").strip()
+        dept = data.get("dept", "").strip()
+        desig = data.get("desig", "").strip()
+        joining = data.get("joining", "").strip()
+        shift_start = data.get("shift_start", "09:00").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
 
-    # Generate numerical ID using counter sequence
-    numeric_id = get_next_sequence("employee_id_seq")
-    now = datetime.datetime.now().isoformat()
-    
-    db.employees.insert_one({
-        "id": numeric_id,
-        "name": name,
-        "emp_id": emp_id,
-        "department": dept,
-        "designation": desig,
-        "joining_date": joining,
-        "shift_start": shift_start,
-        "hourly_rate": hourly_rate,
-        "created_at": now
-    })
-    
-    # Keep existing folder structure logic (str(id))
-    os.makedirs(os.path.join(DATASET_DIR, str(numeric_id)), exist_ok=True)
-    return jsonify({"employee_id": numeric_id})
+        hourly_rate = data.get("hourly_rate", "0").strip()
+        try:
+            hourly_rate = float(hourly_rate)
+        except:
+            hourly_rate = 0.0
+
+        # Generate numerical ID using counter sequence
+        numeric_id = get_next_sequence("employee_id_seq")
+        now = datetime.datetime.now().isoformat()
+        
+        db.employees.insert_one({
+            "id": numeric_id,
+            "name": name,
+            "emp_id": emp_id,
+            "department": dept,
+            "designation": desig,
+            "joining_date": joining,
+            "shift_start": shift_start,
+            "hourly_rate": hourly_rate,
+            "created_at": now
+        })
+        
+        # Keep existing folder structure logic (str(id))
+        os.makedirs(os.path.join(DATASET_DIR, str(numeric_id)), exist_ok=True)
+        return jsonify({"employee_id": numeric_id})
+    except Exception as e:
+        app.logger.error("Error in add_employee: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 # -------- Upload face images --------
 @app.route("/upload_face", methods=["POST"])
