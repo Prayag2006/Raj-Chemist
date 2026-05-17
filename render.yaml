@@ -3,7 +3,7 @@ services:
     name: raj-chemist-attendance
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app -w 1 --threads 2
     plan: free
     envVars:
       - key: MONGO_URI

@@ -1,5 +1,6 @@
 Flask
-pymongo
+pymongo[srv]
+dnspython
 certifi
 numpy
 opencv-python-headless
