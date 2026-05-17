@@ -348,7 +348,7 @@ def recognize_face():
             return jsonify({"recognized": False, "error": "model not trained"}), 200
         
         pred_label, conf = predict_with_model(clf, emb)
-        if conf < 0.3:
+        if conf < 0.65:
             return jsonify({"recognized": False, "confidence": float(conf)}), 200
         
         # Get accurate employee int ID
