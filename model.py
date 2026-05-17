@@ -9,7 +9,7 @@ MODEL_PATH = "model.pkl"
 # Initialize OpenCV Haar Cascade for face detection
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# ---- Utility: extract face crop -> small grayscale vector (embedding) ----
+# ---- Utility: extract face crop -> robust LBP spatial histogram vector ----
 def crop_face_and_embed(bgr_image, bbox):
     (x, y, w, h) = bbox
     if w <= 0 or h <= 0:
@@ -17,14 +17,48 @@ def crop_face_and_embed(bgr_image, bbox):
     face = bgr_image[y:y+h, x:x+w]
     if face.size == 0:
         return None
+    
+    # 1. Convert to grayscale and resize to 64x64 for spatial grid analysis
     face = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
-    face = cv2.resize(face, (32,32), interpolation=cv2.INTER_AREA)
-    emb = face.flatten().astype(np.float32) / 255.0
+    face = cv2.resize(face, (64, 64), interpolation=cv2.INTER_AREA)
+    
+    # 2. Apply Histogram Equalization to eliminate lighting/shadow variations
+    face = cv2.equalizeHist(face)
+    
+    # 3. Compute Local Binary Pattern (LBP)
+    h_f, w_f = face.shape
+    lbp = np.zeros((h_f-2, w_f-2), dtype=np.uint8)
+    neighbors = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, 1), (1, 1), (1, 0),
+        (1, -1), (0, -1)
+    ]
+    center = face[1:h_f-1, 1:w_f-1].astype(np.int32)
+    for index, (dy, dx) in enumerate(neighbors):
+        neighbor = face[1+dy:h_f-1+dy, 1+dx:w_f-1+dx].astype(np.int32)
+        lbp += ((neighbor >= center) * (1 << index)).astype(np.uint8)
+        
+    # Resize LBP back to 64x64 for clean 8x8 grids
+    lbp_resized = cv2.resize(lbp, (64, 64), interpolation=cv2.INTER_NEAREST)
+    
+    # 4. Extract LBP Histogram from 8x8 grids (16 bins per cell)
+    grid_size = 8
+    features = []
+    for r in range(0, 64, grid_size):
+        for c in range(0, 64, grid_size):
+            cell = lbp_resized[r:r+grid_size, c:c+grid_size]
+            hist, _ = np.histogram(cell, bins=16, range=(0, 256))
+            features.append(hist)
+            
+    # 5. Concatenate and normalize histogram to ensure illumination independence
+    emb = np.concatenate(features).astype(np.float32)
+    norm = np.sum(emb)
+    if norm > 0:
+        emb = emb / norm
     return emb
 
 def extract_embedding_for_image(stream_or_bytes):
     # accepts a file-like stream (werkzeug FileStorage.stream)
-    # read image from stream into numpy BGR
     data = stream_or_bytes.read()
     arr = np.frombuffer(data, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -63,7 +97,6 @@ def train_model_background(dataset_dir, progress_callback=None):
         employee_id/
             img1.jpg
             img2.jpg
-    progress_callback(progress_percent, message) -> optional
     """
     X = []
     y = []
@@ -93,7 +126,7 @@ def train_model_background(dataset_dir, progress_callback=None):
             y.append(int(eid))
         processed += 1
         if progress_callback:
-            pct = int((processed/total_employees)*80)  # training progress up to 80% during feature extraction
+            pct = int((processed/total_employees)*80)
             progress_callback(pct, f"Processed {processed}/{total_employees} employees")
 
     if len(X) == 0:
@@ -108,7 +141,7 @@ def train_model_background(dataset_dir, progress_callback=None):
     # fit RandomForest
     if progress_callback:
         progress_callback(85, "Training RandomForest...")
-    clf = RandomForestClassifier(n_estimators=150, n_jobs=-1, random_state=42)
+    clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
     clf.fit(X, y)
 
     with open(MODEL_PATH, "wb") as f:
