@@ -29,7 +29,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # Reads from Environment Variable for Cloud hosting (like Atlas), or defaults to local.
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
 # Added short timeouts so serverless execution doesn't hang indefinitely if DB is down
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
 db = client['attendance_system'] # Database Name
 
 # Helper for Auto-Incrementing IDs just like SQLite
