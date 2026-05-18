@@ -157,31 +157,61 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
     """
     global _cached_clf
 
-    # 1. Restore dataset files from MongoDB if available
+    # 1. Restore dataset files from MongoDB if available (optimized batch-restore)
     if db is not None:
         if progress_callback:
-            progress_callback(5, "Restoring dataset from database...")
+            progress_callback(5, "Checking database for missing dataset files...")
         try:
-            cursor = db.face_images.find({})
-            restored_count = 0
-            for doc in cursor:
+            # Gather all existing local files to prevent duplicate downloads
+            existing_files = set()
+            if os.path.exists(dataset_dir):
+                for root, dirs, files in os.walk(dataset_dir):
+                    for f in files:
+                        if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                            rel_dir = os.path.basename(root)
+                            existing_files.add((rel_dir, f))
+            
+            # Fetch only metadata (no heavy binary image data) to check what is in the DB
+            metadata_cursor = db.face_images.find({}, {"employee_id": 1, "filename": 1})
+            missing_queries = []
+            
+            for doc in metadata_cursor:
                 eid = doc["employee_id"]
                 fname = doc["filename"]
-                img_data = doc["image_data"]
+                if (str(eid), fname) not in existing_files:
+                    missing_queries.append({"employee_id": eid, "filename": fname})
+            
+            restored_count = 0
+            if len(missing_queries) > 0:
+                if progress_callback:
+                    progress_callback(8, f"Downloading {len(missing_queries)} missing images...")
                 
-                emp_folder = os.path.join(dataset_dir, str(eid))
-                os.makedirs(emp_folder, exist_ok=True)
-                
-                file_path = os.path.join(emp_folder, fname)
-                if not os.path.exists(file_path):
-                    with open(file_path, "wb") as f:
-                        f.write(img_data)
-                restored_count += 1
-            if progress_callback and restored_count > 0:
-                progress_callback(10, f"Restored {restored_count} images from database.")
+                # Fetch missing documents with their binary image data in chunks of 100
+                chunk_size = 100
+                for i in range(0, len(missing_queries), chunk_size):
+                    chunk = missing_queries[i : i + chunk_size]
+                    data_cursor = db.face_images.find({"$or": chunk})
+                    for doc in data_cursor:
+                        eid = doc["employee_id"]
+                        fname = doc["filename"]
+                        img_data = doc["image_data"]
+                        
+                        emp_folder = os.path.join(dataset_dir, str(eid))
+                        os.makedirs(emp_folder, exist_ok=True)
+                        
+                        file_path = os.path.join(emp_folder, fname)
+                        with open(file_path, "wb") as f:
+                            f.write(img_data)
+                        restored_count += 1
+            
+            if progress_callback:
+                if restored_count > 0:
+                    progress_callback(10, f"Restored {restored_count} new images. Database synced.")
+                else:
+                    progress_callback(10, "All images already cached locally. Database sync skipped.")
         except Exception as e:
             if progress_callback:
-                progress_callback(10, f"Restore warning: {str(e)}")
+                progress_callback(10, f"Sync warning: {str(e)}")
 
     X = []
     y = []
