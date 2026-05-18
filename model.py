@@ -252,8 +252,8 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
                 
                 # Map the largest face coordinates back to original scale
                 largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-                (x, y, fw, fh) = largest_face
-                bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
+                (x, fy, fw, fh) = largest_face
+                bbox = (int(x / scale), int(fy / scale), int(fw / scale), int(fh / scale))
                 
                 emb = crop_face_and_embed(img, bbox)
                 if emb is None:
