@@ -113,11 +113,25 @@ def load_model_if_exists(db=None):
     return None
 
 def predict_with_model(clf, emb):
-    # returns label and confidence (max probability)
+    # returns label and confidence (max probability or cosine similarity)
     proba = clf.predict_proba([emb])[0]
     idx = np.argmax(proba)
     label = clf.classes_[idx]
-    conf = float(proba[idx])
+    
+    # If centroids are attached, compute Cosine Similarity to the class centroid as confidence
+    if hasattr(clf, 'centroids_') and label in clf.centroids_:
+        centroid = clf.centroids_[label]
+        dot = np.dot(emb, centroid)
+        norm_a = np.linalg.norm(emb)
+        norm_b = np.linalg.norm(centroid)
+        if norm_a > 0 and norm_b > 0:
+            conf = float(dot / (norm_a * norm_b))
+        else:
+            conf = 0.0
+    else:
+        # Fallback to Random Forest vote probability if legacy model
+        conf = float(proba[idx])
+        
     return label, conf
 
 # ---- Training function used in background ----
@@ -201,6 +215,12 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
         progress_callback(85, "Training RandomForest...")
     clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
     clf.fit(X, y)
+
+    # Calculate and store centroids for each class to compute absolute similarity later
+    centroids = {}
+    for c in np.unique(y):
+        centroids[int(c)] = np.mean(X[y == c], axis=0)
+    clf.centroids_ = centroids
 
     # Save to local file
     try:
