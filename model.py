@@ -157,155 +157,169 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
     """
     global _cached_clf
 
-    # 1. Restore dataset files from MongoDB if available (optimized batch-restore)
-    if db is not None:
-        if progress_callback:
-            progress_callback(5, "Checking database for missing dataset files...")
-        try:
-            # Gather all existing local files to prevent duplicate downloads
-            existing_files = set()
-            if os.path.exists(dataset_dir):
-                for root, dirs, files in os.walk(dataset_dir):
-                    for f in files:
-                        if f.lower().endswith((".jpg", ".jpeg", ".png")):
-                            rel_dir = os.path.basename(root)
-                            existing_files.add((rel_dir, f))
-            
-            # Fetch only metadata (no heavy binary image data) to check what is in the DB
-            metadata_cursor = db.face_images.find({}, {"employee_id": 1, "filename": 1})
-            missing_queries = []
-            
-            for doc in metadata_cursor:
-                eid = doc["employee_id"]
-                fname = doc["filename"]
-                if (str(eid), fname) not in existing_files:
-                    missing_queries.append({"employee_id": eid, "filename": fname})
-            
-            restored_count = 0
-            if len(missing_queries) > 0:
-                if progress_callback:
-                    progress_callback(8, f"Downloading {len(missing_queries)} missing images...")
-                
-                # Fetch missing documents with their binary image data in chunks of 100
-                chunk_size = 100
-                for i in range(0, len(missing_queries), chunk_size):
-                    chunk = missing_queries[i : i + chunk_size]
-                    data_cursor = db.face_images.find({"$or": chunk})
-                    for doc in data_cursor:
-                        eid = doc["employee_id"]
-                        fname = doc["filename"]
-                        img_data = doc["image_data"]
-                        
-                        emp_folder = os.path.join(dataset_dir, str(eid))
-                        os.makedirs(emp_folder, exist_ok=True)
-                        
-                        file_path = os.path.join(emp_folder, fname)
-                        with open(file_path, "wb") as f:
-                            f.write(img_data)
-                        restored_count += 1
-            
-            if progress_callback:
-                if restored_count > 0:
-                    progress_callback(10, f"Restored {restored_count} new images. Database synced.")
-                else:
-                    progress_callback(10, "All images already cached locally. Database sync skipped.")
-        except Exception as e:
-            if progress_callback:
-                progress_callback(10, f"Sync warning: {str(e)}")
-
-    X = []
-    y = []
-    employee_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d))]
-    total_employees = max(1, len(employee_dirs))
-    processed = 0
-
-    for eid in employee_dirs:
-        folder = os.path.join(dataset_dir, eid)
-        files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg",".jpeg",".png"))]
-        for fn in files:
-            path = os.path.join(folder, fn)
-            img = cv2.imread(path)
-            if img is None:
-                continue
-            
-            # Speed up face detection by downscaling the detection image
-            h, w = img.shape[:2]
-            scale = 1.0
-            if w > 240:
-                scale = 240.0 / w
-                detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
-            else:
-                detect_img = img
-                
-            gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
-            min_size_val = int(30 * scale)
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
-            if len(faces) == 0:
-                continue
-            
-            # Map the largest face coordinates back to original scale
-            largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-            (x, y, fw, fh) = largest_face
-            bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
-            
-            emb = crop_face_and_embed(img, bbox)
-            if emb is None:
-                continue
-            X.append(emb)
-            y.append(int(eid))
-        processed += 1
-        if progress_callback:
-            pct = int((processed/total_employees)*80)
-            progress_callback(pct, f"Processed {processed}/{total_employees} employees")
-
-    if len(X) == 0:
-        if progress_callback:
-            progress_callback(0, "No training data found")
-        return
-
-    # convert
-    X = np.stack(X)
-    y = np.array(y)
-
-    # fit RandomForest
-    if progress_callback:
-        progress_callback(85, "Training RandomForest...")
-    clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
-    clf.fit(X, y)
-
-    # Calculate and store centroids for each class to compute absolute similarity later
-    centroids = {}
-    for c in np.unique(y):
-        centroids[int(c)] = np.mean(X[y == c], axis=0)
-    clf.centroids_ = centroids
-
-    # Save to local file
     try:
-        with open(MODEL_PATH, "wb") as f:
-            pickle.dump(clf, f)
-    except Exception:
-        pass
-
-    # Save to MongoDB
-    if db is not None:
-        if progress_callback:
-            progress_callback(95, "Uploading trained model to database...")
-        try:
-            db.models.replace_one(
-                {"_id": "latest_model"},
-                {
-                    "_id": "latest_model",
-                    "model_bytes": pickle.dumps(clf),
-                    "updated_at": datetime.datetime.utcnow().isoformat()
-                },
-                upsert=True
-            )
-        except Exception as e:
+        # 1. Restore dataset files from MongoDB if available (optimized batch-restore)
+        if db is not None:
             if progress_callback:
-                progress_callback(95, f"Warning: Could not save model to DB: {str(e)}")
+                progress_callback(5, "Checking database for missing dataset files...")
+            try:
+                # Gather all existing local files to prevent duplicate downloads
+                existing_files = set()
+                if os.path.exists(dataset_dir):
+                    for root, dirs, files in os.walk(dataset_dir):
+                        for f in files:
+                            if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                                rel_dir = os.path.basename(root)
+                                existing_files.add((rel_dir, f))
+                
+                # Fetch only metadata (no heavy binary image data) to check what is in the DB
+                metadata_cursor = db.face_images.find({}, {"employee_id": 1, "filename": 1})
+                missing_queries = []
+                
+                for doc in metadata_cursor:
+                    eid = doc.get("employee_id")
+                    fname = doc.get("filename")
+                    if not eid or not fname:
+                        continue
+                    if (str(eid), fname) not in existing_files:
+                        missing_queries.append({"employee_id": int(eid), "filename": fname})
+                
+                restored_count = 0
+                if len(missing_queries) > 0:
+                    if progress_callback:
+                        progress_callback(8, f"Downloading {len(missing_queries)} missing images...")
+                    
+                    # Fetch missing documents with their binary image data in chunks of 100
+                    chunk_size = 100
+                    for i in range(0, len(missing_queries), chunk_size):
+                        chunk = missing_queries[i : i + chunk_size]
+                        data_cursor = db.face_images.find({"$or": chunk})
+                        for doc in data_cursor:
+                            eid = doc.get("employee_id")
+                            fname = doc.get("filename")
+                            img_data = doc.get("image_data")
+                            if not eid or not fname or not img_data:
+                                continue
+                            
+                            emp_folder = os.path.join(dataset_dir, str(eid))
+                            os.makedirs(emp_folder, exist_ok=True)
+                            
+                            file_path = os.path.join(emp_folder, fname)
+                            with open(file_path, "wb") as f:
+                                f.write(img_data)
+                            restored_count += 1
+                
+                if progress_callback:
+                    if restored_count > 0:
+                        progress_callback(10, f"Restored {restored_count} new images. Database synced.")
+                    else:
+                        progress_callback(10, "All images already cached locally. Database sync skipped.")
+            except Exception as e:
+                if progress_callback:
+                    progress_callback(10, f"Sync warning: {str(e)}")
 
-    # Update cache
-    _cached_clf = clf
+        X = []
+        y = []
+        
+        # Filter: only look at numeric directories to prevent ValueError: int(eid) on __pycache__ or other folders
+        employee_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d)) and d.isdigit()]
+        total_employees = max(1, len(employee_dirs))
+        processed = 0
 
-    if progress_callback:
-        progress_callback(100, "Training complete")
+        for eid in employee_dirs:
+            folder = os.path.join(dataset_dir, eid)
+            files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg",".jpeg",".png"))]
+            for fn in files:
+                path = os.path.join(folder, fn)
+                img = cv2.imread(path)
+                if img is None:
+                    continue
+                
+                # Speed up face detection by downscaling the detection image
+                h, w = img.shape[:2]
+                scale = 1.0
+                if w > 240:
+                    scale = 240.0 / w
+                    detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
+                else:
+                    detect_img = img
+                    
+                gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
+                min_size_val = int(30 * scale)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
+                if len(faces) == 0:
+                    continue
+                
+                # Map the largest face coordinates back to original scale
+                largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
+                (x, y, fw, fh) = largest_face
+                bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
+                
+                emb = crop_face_and_embed(img, bbox)
+                if emb is None:
+                    continue
+                X.append(emb)
+                y.append(int(eid))
+            processed += 1
+            if progress_callback:
+                pct = int((processed/total_employees)*80)
+                progress_callback(pct, f"Processed {processed}/{total_employees} employees")
+
+        if len(X) == 0:
+            if progress_callback:
+                progress_callback(0, "No training data found")
+            return
+
+        # convert
+        X = np.stack(X)
+        y = np.array(y)
+
+        # fit RandomForest
+        if progress_callback:
+            progress_callback(85, "Training RandomForest...")
+        clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
+        clf.fit(X, y)
+
+        # Calculate and store centroids for each class to compute absolute similarity later
+        centroids = {}
+        for c in np.unique(y):
+            centroids[int(c)] = np.mean(X[y == c], axis=0)
+        clf.centroids_ = centroids
+
+        # Save to local file
+        try:
+            with open(MODEL_PATH, "wb") as f:
+                pickle.dump(clf, f)
+        except Exception:
+            pass
+
+        # Save to MongoDB
+        if db is not None:
+            if progress_callback:
+                progress_callback(95, "Uploading trained model to database...")
+            try:
+                db.models.replace_one(
+                    {"_id": "latest_model"},
+                    {
+                        "_id": "latest_model",
+                        "model_bytes": pickle.dumps(clf),
+                        "updated_at": datetime.datetime.utcnow().isoformat()
+                    },
+                    upsert=True
+                )
+            except Exception as e:
+                if progress_callback:
+                    progress_callback(95, f"Warning: Could not save model to DB: {str(e)}")
+
+        # Update cache
+        _cached_clf = clf
+
+        if progress_callback:
+            progress_callback(100, "Training complete")
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"CRITICAL ERROR in train_model_background:\n{tb}")
+        if progress_callback:
+            progress_callback(0, f"Error during training: {str(e)}")
