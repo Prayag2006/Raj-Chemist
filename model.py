@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import pickle
+import datetime
 from sklearn.ensemble import RandomForestClassifier
 
 MODEL_PATH = "model.pkl"
@@ -76,11 +77,40 @@ def extract_embedding_for_image(stream_or_bytes):
     return emb
 
 # ---- Load model helpers ----
-def load_model_if_exists():
-    if not os.path.exists(MODEL_PATH):
-        return None
-    with open(MODEL_PATH, "rb") as f:
-        return pickle.load(f)
+_cached_clf = None
+
+def load_model_if_exists(db=None):
+    global _cached_clf
+    if _cached_clf is not None:
+        return _cached_clf
+        
+    # Try loading from local file
+    if os.path.exists(MODEL_PATH):
+        try:
+            with open(MODEL_PATH, "rb") as f:
+                _cached_clf = pickle.load(f)
+            return _cached_clf
+        except Exception:
+            pass
+            
+    # Try loading from MongoDB
+    if db is not None:
+        try:
+            model_doc = db.models.find_one({"_id": "latest_model"})
+            if model_doc and "model_bytes" in model_doc:
+                clf = pickle.loads(model_doc["model_bytes"])
+                _cached_clf = clf
+                # Also save to local disk for faster subsequent loads
+                try:
+                    with open(MODEL_PATH, "wb") as f:
+                        f.write(model_doc["model_bytes"])
+                except Exception:
+                    pass
+                return _cached_clf
+        except Exception:
+            pass
+            
+    return None
 
 def predict_with_model(clf, emb):
     # returns label and confidence (max probability)
@@ -91,13 +121,41 @@ def predict_with_model(clf, emb):
     return label, conf
 
 # ---- Training function used in background ----
-def train_model_background(dataset_dir, progress_callback=None):
+def train_model_background(dataset_dir, db=None, progress_callback=None):
     """
     dataset_dir/
         employee_id/
             img1.jpg
             img2.jpg
     """
+    global _cached_clf
+
+    # 1. Restore dataset files from MongoDB if available
+    if db is not None:
+        if progress_callback:
+            progress_callback(5, "Restoring dataset from database...")
+        try:
+            cursor = db.face_images.find({})
+            restored_count = 0
+            for doc in cursor:
+                eid = doc["employee_id"]
+                fname = doc["filename"]
+                img_data = doc["image_data"]
+                
+                emp_folder = os.path.join(dataset_dir, str(eid))
+                os.makedirs(emp_folder, exist_ok=True)
+                
+                file_path = os.path.join(emp_folder, fname)
+                if not os.path.exists(file_path):
+                    with open(file_path, "wb") as f:
+                        f.write(img_data)
+                restored_count += 1
+            if progress_callback and restored_count > 0:
+                progress_callback(10, f"Restored {restored_count} images from database.")
+        except Exception as e:
+            if progress_callback:
+                progress_callback(10, f"Restore warning: {str(e)}")
+
     X = []
     y = []
     employee_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d))]
@@ -144,8 +202,33 @@ def train_model_background(dataset_dir, progress_callback=None):
     clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
     clf.fit(X, y)
 
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump(clf, f)
+    # Save to local file
+    try:
+        with open(MODEL_PATH, "wb") as f:
+            pickle.dump(clf, f)
+    except Exception:
+        pass
+
+    # Save to MongoDB
+    if db is not None:
+        if progress_callback:
+            progress_callback(95, "Uploading trained model to database...")
+        try:
+            db.models.replace_one(
+                {"_id": "latest_model"},
+                {
+                    "_id": "latest_model",
+                    "model_bytes": pickle.dumps(clf),
+                    "updated_at": datetime.datetime.utcnow().isoformat()
+                },
+                upsert=True
+            )
+        except Exception as e:
+            if progress_callback:
+                progress_callback(95, f"Warning: Could not save model to DB: {str(e)}")
+
+    # Update cache
+    _cached_clf = clf
 
     if progress_callback:
         progress_callback(100, "Training complete")

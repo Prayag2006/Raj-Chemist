@@ -32,6 +32,17 @@ MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
 db = client['attendance_system'] # Database Name
 
+# Try to restore the model.pkl from MongoDB on startup so it's available immediately
+try:
+    model_doc = db.models.find_one({"_id": "latest_model"})
+    if model_doc and "model_bytes" in model_doc:
+        # Write to local model path
+        with open(MODEL_PATH, "wb") as f:
+            f.write(model_doc["model_bytes"])
+        print("Successfully restored trained model from MongoDB on startup.")
+except Exception as e:
+    print(f"Could not restore model from MongoDB on startup: {e}")
+
 # Helper for Auto-Incrementing IDs just like SQLite
 def get_next_sequence(counter_name):
     ret = db.counters.find_one_and_update(
@@ -188,6 +199,10 @@ def handle_500(e):
 def index():
     return render_template("index.html")
 
+@app.route("/ping")
+def ping():
+    return "pong", 200
+
 # Dashboard stats API (last 30 days counts)
 @app.route("/attendance_stats")
 def attendance_stats():
@@ -273,9 +288,23 @@ def upload_face():
         os.makedirs(folder, exist_ok=True)
     for f in files:
         try:
+            # Read image bytes
+            img_bytes = f.read()
+            # Reset pointer for saving locally
+            f.seek(0)
+            
+            # Save to disk
             fname = f"{datetime.datetime.now().timestamp():.6f}_{saved}.jpg"
             path = os.path.join(folder, fname)
             f.save(path)
+            
+            # Save to MongoDB for persistent backup
+            db.face_images.insert_one({
+                "employee_id": int(employee_id),
+                "filename": fname,
+                "image_data": img_bytes,
+                "created_at": datetime.datetime.utcnow().isoformat()
+            })
             saved += 1
         except Exception as e:
             app.logger.error("save error: %s", e)
@@ -296,7 +325,7 @@ def train_model_route():
         })
         
     write_train_status({"running": True, "progress": 0, "message": "Starting training"})
-    t = threading.Thread(target=train_model_background, args=(DATASET_DIR, status_callback))
+    t = threading.Thread(target=train_model_background, args=(DATASET_DIR, db, status_callback))
     t.daemon = True
     t.start()
     return jsonify({"status": "started"}), 202
@@ -343,7 +372,7 @@ def recognize_face():
             return jsonify({"recognized": False, "error": "no face detected"}), 200
         
         from model import load_model_if_exists, predict_with_model
-        clf = load_model_if_exists()
+        clf = load_model_if_exists(db)
         if clf is None:
             return jsonify({"recognized": False, "error": "model not trained"}), 200
         
@@ -526,6 +555,7 @@ def employees_list():
 def delete_employee(eid):
     db.employees.delete_one({"id": int(eid)})
     db.attendance.delete_many({"employee_id": int(eid)})
+    db.face_images.delete_many({"employee_id": int(eid)})
     
     folder = os.path.join(DATASET_DIR, str(eid))
     if os.path.isdir(folder):
@@ -752,6 +782,20 @@ def employee_image(eid):
         images = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
         if images:
             return send_file(os.path.join(folder, images[0]))
+            
+    # Try MongoDB if local file not found (due to container sleep / reset)
+    try:
+        img_doc = db.face_images.find_one({"employee_id": int(eid)})
+        if img_doc and "image_data" in img_doc:
+            return send_file(
+                io.BytesIO(img_doc["image_data"]),
+                mimetype="image/jpeg",
+                as_attachment=False,
+                download_name=img_doc.get("filename", "face.jpg")
+            )
+    except Exception as e:
+        app.logger.error("DB Error in employee_image: %s", e)
+        
     abort(404)
 
 @app.route("/api/sidebar_employee/<direction>/<int:current_eid>")
