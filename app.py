@@ -338,6 +338,41 @@ def train_model_route():
 def train_status():
     return jsonify(read_train_status())
 
+# -------- Clear all attendance logs --------
+@app.route("/clear_attendance", methods=["GET"])
+def clear_attendance():
+    try:
+        res = db.attendance.delete_many({})
+        return jsonify({
+            "status": "success",
+            "message": f"Successfully deleted {res.deleted_count} attendance records."
+        }), 200
+    except Exception as e:
+        app.logger.error("Error clearing attendance: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# -------- Clear all employee and face records --------
+@app.route("/clear_employees", methods=["GET"])
+def clear_employees():
+    try:
+        emp_res = db.employees.delete_many({})
+        face_res = db.face_images.delete_many({})
+        db.counters.delete_many({})
+        
+        # Clean local dataset directory
+        import shutil
+        if os.path.exists(DATASET_DIR):
+            shutil.rmtree(DATASET_DIR)
+            os.makedirs(DATASET_DIR, exist_ok=True)
+            
+        return jsonify({
+            "status": "success",
+            "message": f"Successfully deleted {emp_res.deleted_count} employees and {face_res.deleted_count} face images."
+        }), 200
+    except Exception as e:
+        app.logger.error("Error clearing employees: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/mark_attendance", methods=["GET"])
 def mark_attendance_page():
     client_ip = request.remote_addr
