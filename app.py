@@ -99,6 +99,10 @@ def check_wifi_access(client_ip):
     if not client_ip:
         return False, "Could not determine client IP address."
 
+    # Parse first IP if comma-separated proxy chain
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
     # Strip IPv6-mapped IPv4 prefix if present (e.g., ::ffff:192.168.1.50 -> 192.168.1.50)
     if client_ip.startswith("::ffff:"):
         client_ip = client_ip[7:]
@@ -341,6 +345,9 @@ def mark_attendance_page():
     if request.headers.getlist("X-Forwarded-For"):
         client_ip = request.headers.getlist("X-Forwarded-For")[0]
     
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
     # Normalize IP prefix
     if client_ip and client_ip.startswith("::ffff:"):
         client_ip = client_ip[7:]
@@ -355,6 +362,9 @@ def recognize_face():
     if request.headers.getlist("X-Forwarded-For"):
         client_ip = request.headers.getlist("X-Forwarded-For")[0]
         
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
     # Normalize IP prefix
     if client_ip and client_ip.startswith("::ffff:"):
         client_ip = client_ip[7:]
@@ -880,6 +890,9 @@ def settings_page():
     if request.headers.getlist("X-Forwarded-For"):
         client_ip = request.headers.getlist("X-Forwarded-For")[0]
         
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
     # Normalize IP prefix
     if client_ip and client_ip.startswith("::ffff:"):
         client_ip = client_ip[7:]
