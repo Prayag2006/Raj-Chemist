@@ -66,14 +66,27 @@ def extract_embedding_for_image(stream_or_bytes):
     if img is None:
         return None
     
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    # Speed up face detection by downscaling the detection image
+    h, w = img.shape[:2]
+    scale = 1.0
+    if w > 240:
+        scale = 240.0 / w
+        detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        detect_img = img
+        
+    gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
+    min_size_val = int(30 * scale)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
     if len(faces) == 0:
         return None
     
-    # take largest face
+    # take largest face and map coordinates back
     largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-    emb = crop_face_and_embed(img, largest_face)
+    (x, y, fw, fh) = largest_face
+    bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
+    
+    emb = crop_face_and_embed(img, bbox)
     return emb
 
 # ---- Load model helpers ----
@@ -185,13 +198,27 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
             if img is None:
                 continue
             
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            # Speed up face detection by downscaling the detection image
+            h, w = img.shape[:2]
+            scale = 1.0
+            if w > 240:
+                scale = 240.0 / w
+                detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
+            else:
+                detect_img = img
+                
+            gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
+            min_size_val = int(30 * scale)
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
             if len(faces) == 0:
                 continue
             
+            # Map the largest face coordinates back to original scale
             largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-            emb = crop_face_and_embed(img, largest_face)
+            (x, y, fw, fh) = largest_face
+            bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
+            
+            emb = crop_face_and_embed(img, bbox)
             if emb is None:
                 continue
             X.append(emb)
