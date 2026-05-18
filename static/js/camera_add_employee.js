@@ -35,10 +35,14 @@ startCaptureBtn.addEventListener("click", async () => {
   startCaptureBtn.disabled = true;
   captureStatus.innerText = "Connecting to video hardware...";
   try {
-    const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    // Request optimized 640x480 resolution from webcam to save memory/CPU
+    const localStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false
+    });
     stream = localStream;
     
-    // Crucial: Set up events BEFORE binding source
+    // Set up events BEFORE binding source
     video.onloadedmetadata = () => {
         captureStatus.innerText = "Sensor warmed. Collecting samples...";
         // Warmup and invoke
@@ -48,7 +52,6 @@ startCaptureBtn.addEventListener("click", async () => {
     };
     
     video.srcObject = stream;
-    // Force playback trigger
     await video.play().catch(e => console.log("Autoplay error: ", e));
     
   } catch (err) {
@@ -60,18 +63,29 @@ startCaptureBtn.addEventListener("click", async () => {
 
 async function captureImagesLoop() {
   const canvas = document.createElement("canvas");
-  // Use exact natural resolution of current device feed
-  canvas.width = video.videoWidth || 640;
-  canvas.height = video.videoHeight || 480;
+  
+  // Optimize: Resize captured frames to max-width 480 to speed up upload
+  let targetWidth = 480;
+  let targetHeight = 360;
+  if (video.videoWidth && video.videoHeight) {
+    const aspect = video.videoWidth / video.videoHeight;
+    targetHeight = Math.round(targetWidth / aspect);
+  }
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  
   const ctx = canvas.getContext("2d");
 
   while (captured < maxImages) {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.85)); // Minimal drop in quality for speed
+    
+    // Compress to 80% JPEG quality to optimize payload
+    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.80));
     images.push(blob);
     captured++;
     captureStatus.innerText = `Capturing Biometrics: ${captured} / ${maxImages} frames`;
     progressBar.style.width = `${(captured / maxImages) * 100}%`;
+    
     // Optimized fast sampling interval
     await new Promise(r => setTimeout(r, 100));
   }

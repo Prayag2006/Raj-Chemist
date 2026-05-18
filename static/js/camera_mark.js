@@ -6,19 +6,23 @@ const markStatus = document.getElementById("markStatus");
 const recognizedList = document.getElementById("recognizedList");
 
 let markStream = null;
-let markInterval = null;
+let markInterval = null; // Storing either true or timeout ID
 let recognizedIds = new Set();
 
 startMarkBtn.addEventListener("click", async () => {
   startMarkBtn.disabled = true;
   stopMarkBtn.disabled = false;
   try {
-    markStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    // Request optimized 640x480 resolution from webcam to save memory/CPU
+    markStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 } }
+    });
     
     markVideo.onloadedmetadata = () => {
         markStatus.innerText = "Scanning active...";
         markStatus.className = "mt-2 badge bg-light text-dark border fw-normal py-2 px-3";
-        markInterval = setInterval(captureAndRecognize, 1200);
+        markInterval = true;
+        captureLoop(); // Start self-paced loop
     };
     
     markVideo.srcObject = markStream;
@@ -37,7 +41,9 @@ stopMarkBtn.addEventListener("click", () => {
 
 function stopCamera(statusMessage) {
   if (markInterval) {
-    clearInterval(markInterval);
+    if (typeof markInterval === "number" || markInterval) {
+      clearTimeout(markInterval);
+    }
     markInterval = null;
   }
   if (markStream) {
@@ -51,15 +57,36 @@ function stopCamera(statusMessage) {
   }
 }
 
+async function captureLoop() {
+  if (!markStream || !markInterval) return;
+  await captureAndRecognize();
+  if (markStream && markInterval) {
+    // Wait 500ms before triggering the next capture to avoid request pileup
+    markInterval = setTimeout(captureLoop, 500);
+  }
+}
+
 async function captureAndRecognize() {
   const canvas = document.createElement("canvas");
-  canvas.width = markVideo.videoWidth || 640;
-  canvas.height = markVideo.videoHeight || 480;
+  
+  // Optimize: Limit captured snapshot size to max 480px width to speed up upload & Haar processing
+  let targetWidth = 480;
+  let targetHeight = 360;
+  if (markVideo.videoWidth && markVideo.videoHeight) {
+    const aspect = markVideo.videoWidth / markVideo.videoHeight;
+    targetHeight = Math.round(targetWidth / aspect);
+  }
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+  
   const ctx = canvas.getContext("2d");
   ctx.drawImage(markVideo, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.85));
+  
+  // Compress slightly to 80% JPEG quality to save bandwidth
+  const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.80));
   const fd = new FormData();
   fd.append("image", blob, "snap.jpg");
+  
   try {
     const res = await fetch("/recognize_face", { method: "POST", body: fd });
     const j = await res.json();
@@ -67,9 +94,7 @@ async function captureAndRecognize() {
     if (j.recognized) {
       const statusText = j.status || "Recognized";
       
-      // Check if this was an actual registration event (not debounced)
       if (statusText !== "Debounced (Wait 1 min)") {
-          // 1. Build Welcome / Bye message
           let greeting = "";
           if (statusText === "Check In" || statusText === "Late Check In") {
               greeting = `Welcome, ${j.name}! 👋`;
@@ -79,9 +104,8 @@ async function captureAndRecognize() {
               greeting = `${j.name}: ${statusText}`;
           }
           
-          // 2. Print message to logs and status
           markStatus.innerText = greeting;
-          markStatus.className = "mt-2 badge bg-success text-white border fw-normal py-2 px-3"; // Give it a vibrant success badge
+          markStatus.className = "mt-2 badge bg-success text-white border fw-normal py-2 px-3";
           
           const li = document.createElement("li");
           li.className = "list-group-item d-flex justify-content-between align-items-center bg-light";
@@ -93,10 +117,8 @@ async function captureAndRecognize() {
           `;
           recognizedList.prepend(li);
 
-          // 3. Automatic shutdown camera instantly
           stopCamera(greeting);
       } else {
-          // Debounced case: let them know they already did it and shut off camera to prevent continuous spam.
           const msg = `${j.name}: Already marked recently (Debounced)`;
           stopCamera(msg);
       }
@@ -110,7 +132,6 @@ async function captureAndRecognize() {
       }
     }
   } catch (err) {
-    console.error(err);
+    console.error("Recognition request failed:", err);
   }
 }
-
