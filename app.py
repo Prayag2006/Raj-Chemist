@@ -112,6 +112,28 @@ def restore_model_async():
 
 threading.Thread(target=restore_model_async, daemon=True).start()
 
+# ---------- Render Keepalive: Prevent Cold Starts ----------
+def _keepalive_ping():
+    """Pings this server every 10 minutes to prevent Render free-tier sleep."""
+    import time
+    import urllib.request
+    # Wait 60 seconds after startup before starting pings
+    time.sleep(60)
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    if not render_url:
+        # Not on Render, no keepalive needed
+        return
+    ping_url = render_url.rstrip("/") + "/ping"
+    while True:
+        try:
+            urllib.request.urlopen(ping_url, timeout=10)
+            print(f"[Keepalive] Pinged {ping_url} successfully.")
+        except Exception as e:
+            print(f"[Keepalive] Ping failed: {e}")
+        time.sleep(600)  # Ping every 10 minutes
+
+threading.Thread(target=_keepalive_ping, daemon=True).start()
+
 # Helper for Auto-Incrementing IDs just like SQLite
 def get_next_sequence(counter_name):
     ret = db.counters.find_one_and_update(
