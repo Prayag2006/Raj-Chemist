@@ -60,16 +60,27 @@ else:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
 db = client['attendance_system'] # Database Name
 
-# Try to restore the model.pkl from MongoDB on startup so it's available immediately
+# Create database indexes for maximum query performance
 try:
-    model_doc = db.models.find_one({"_id": "latest_model"})
-    if model_doc and "model_bytes" in model_doc:
-        # Write to local model path
-        with open(MODEL_PATH, "wb") as f:
-            f.write(model_doc["model_bytes"])
-        print("Successfully restored trained model from MongoDB on startup.")
+    db.employees.create_index("id", unique=True)
+    db.attendance.create_index([("employee_id", 1), ("timestamp", 1)])
+    db.attendance.create_index("timestamp")
+    print("Database indexes verified/created successfully.")
 except Exception as e:
-    print(f"Could not restore model from MongoDB on startup: {e}")
+    print(f"Index creation warning: {e}")
+
+# Try to restore the model.pkl from MongoDB asynchronously in the background so it doesn't block server startup
+def restore_model_async():
+    try:
+        model_doc = db.models.find_one({"_id": "latest_model"})
+        if model_doc and "model_bytes" in model_doc:
+            with open(MODEL_PATH, "wb") as f:
+                f.write(model_doc["model_bytes"])
+            print("Successfully restored trained model from MongoDB in background.")
+    except Exception as e:
+        print(f"Could not restore model from MongoDB in background: {e}")
+
+threading.Thread(target=restore_model_async, daemon=True).start()
 
 # Helper for Auto-Incrementing IDs just like SQLite
 def get_next_sequence(counter_name):
