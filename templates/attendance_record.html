@@ -41,9 +41,9 @@
       {% for r in records %}
       <tr>
         <td class="day-label">
-            <div class="js-time-formatter" data-iso="{{ r[3] }}">
-                <strong class="date-part">...</strong><br/>
-                <span class="text-muted small time-part">Loading...</span>
+            <div>
+                <strong class="date-part">{{ r[3] }}</strong><br/>
+                <span class="text-muted small time-part">{{ r[5] }}</span>
             </div>
         </td>
         <td style="width: 50%;">
@@ -90,27 +90,4 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-    document.querySelectorAll(".js-time-formatter").forEach(div => {
-        const isoStr = div.dataset.iso;
-        if (!isoStr) return;
-        
-        try {
-            const dateObj = new Date(isoStr);
-            const dateText = dateObj.toLocaleDateString('en-CA');
-            const timeText = dateObj.toLocaleTimeString('en-US', {
-                hour: 'numeric',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: true
-            });
-            div.querySelector(".date-part").innerText = dateText;
-            div.querySelector(".time-part").innerText = timeText;
-        } catch (e) {
-            console.error("Date format err", e);
-        }
-    });
-});
-</script>
 {% endblock %}

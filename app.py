@@ -1,15 +1,40 @@
 import os
 import io
+import queue
 import threading
 import datetime
 import json
-from flask import Flask, render_template, request, jsonify, send_file, abort
+from flask import Flask, render_template, request, jsonify, send_file, abort, Response
 from model import train_model_background, extract_embedding_for_image, MODEL_PATH
 
 # --- MONGODB IMPORTS ---
 from pymongo import MongoClient, ReturnDocument
 from bson import ObjectId
 import certifi
+
+# ---------- Real-time SSE Clients & Broadcast ----------
+sse_clients = []
+
+def broadcast_sse(event_type, data):
+    for q in list(sse_clients):
+        try:
+            q.put_nowait({"event": event_type, "data": data})
+        except Exception:
+            pass
+
+# ---------- Timezone & Datetime Parsing Helper ----------
+def parse_dt(ts_str):
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            # Assume UTC for legacy naive strings in DB
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
+    except Exception:
+        return None
+
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(APP_DIR, "dataset")
@@ -29,7 +54,10 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # Reads from Environment Variable for Cloud hosting (like Atlas), or defaults to local.
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
 # Added short timeouts so serverless execution doesn't hang indefinitely if DB is down
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
+if "localhost" in MONGO_URI:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
+else:
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
 db = client['attendance_system'] # Database Name
 
 # Try to restore the model.pkl from MongoDB on startup so it's available immediately
@@ -156,7 +184,8 @@ def inject_sidebar_data():
             return default_sb
             
         eid = emp["id"]
-        month_str = datetime.datetime.now().strftime("%Y-%m")
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
         query = {"employee_id": eid, "timestamp": {"$regex": f"^{month_str}"}}
         records = list(db.attendance.find(query).sort("timestamp", 1))
         
@@ -164,13 +193,14 @@ def inject_sidebar_data():
         last_checkin_time = None
         for r in records:
             status = r.get("status", "")
-            ts = datetime.datetime.fromisoformat(r["timestamp"])
-            if status in ["Check In", "Late Check In"]:
-                last_checkin_time = ts
-            elif status == "Check Out":
-                if last_checkin_time and last_checkin_time.date() == ts.date():
-                    total_seconds += (ts - last_checkin_time).total_seconds()
-                    last_checkin_time = None
+            ts = parse_dt(r["timestamp"])
+            if ts:
+                if status in ["Check In", "Late Check In"]:
+                    last_checkin_time = ts
+                elif status == "Check Out":
+                    if last_checkin_time:
+                        total_seconds += (ts - last_checkin_time).total_seconds()
+                        last_checkin_time = None
                     
         total_hours = total_seconds / 3600.0
         rate = emp.get("hourly_rate", 0.0)
@@ -206,6 +236,70 @@ def index():
 @app.route("/ping")
 def ping():
     return "pong", 200
+
+@app.route("/stream")
+def stream():
+    def event_stream():
+        q = queue.Queue(maxsize=50)
+        sse_clients.append(q)
+        try:
+            # Send initial connection event
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                try:
+                    event = q.get(timeout=20)  # Heartbeat timeout
+                    yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+                except queue.Empty:
+                    # Keep connection alive
+                    yield "event: heartbeat\ndata: {}\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            if q in sse_clients:
+                sse_clients.remove(q)
+    return Response(event_stream(), mimetype="text/event-stream")
+
+@app.route("/mock_attendance")
+def mock_attendance():
+    # Try to find a real employee first
+    emp = db.employees.find_one({})
+    if emp:
+        numeric_eid = emp["id"]
+        name = emp["name"]
+    else:
+        numeric_eid = 99
+        name = "Prayag"
+        
+    import random
+    status_options = ["Check In", "Late Check In", "Check Out"]
+    status = random.choice(status_options)
+    
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    attendance_id = get_next_sequence("attendance_id_seq")
+    
+    db.attendance.insert_one({
+        "id": attendance_id,
+        "employee_id": numeric_eid,
+        "name": name,
+        "timestamp": ts,
+        "status": status
+    })
+    
+    broadcast_sse("attendance_marked", {
+        "id": int(attendance_id),
+        "employee_id": int(numeric_eid),
+        "name": name,
+        "timestamp": ts,
+        "status": status
+    })
+    
+    return jsonify({
+        "mocked": True,
+        "employee_id": numeric_eid,
+        "name": name,
+        "timestamp": ts,
+        "status": status
+    })
 
 # Dashboard stats API (last 30 days counts)
 @app.route("/attendance_stats")
@@ -322,13 +416,18 @@ def train_model_route():
         return jsonify({"status": "already_running"}), 202
     
     def status_callback(p, m):
-        write_train_status({
+        payload = {
             "running": (p < 100),
             "progress": p,
             "message": m
-        })
+        }
+        write_train_status(payload)
+        broadcast_sse("train_status", payload)
         
-    write_train_status({"running": True, "progress": 0, "message": "Starting training"})
+    start_payload = {"running": True, "progress": 0, "message": "Starting training"}
+    write_train_status(start_payload)
+    broadcast_sse("train_status", start_payload)
+    
     t = threading.Thread(target=train_model_background, args=(DATASET_DIR, db, status_callback))
     t.daemon = True
     t.start()
@@ -441,36 +540,48 @@ def recognize_face():
             sort=[("timestamp", -1)]
         )
         
-        now_dt = datetime.datetime.now()
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        now_local = now_dt.astimezone(IST)
         next_status = "Check In"
         
         if last_rec:
             last_ts_str = last_rec.get("timestamp")
             last_status = last_rec.get("status", "Check In")
             try:
-                last_dt = datetime.datetime.fromisoformat(last_ts_str)
-                delta = (now_dt - last_dt).total_seconds()
-                if delta < 60:
-                    return jsonify({"recognized": True, "employee_id": numeric_eid, "name": name, "confidence": float(conf), "status": "Debounced (Wait 1 min)"}), 200
-                next_status = "Check Out" if last_status in ["Check In", "Late Check In"] else "Check In"
+                last_dt = parse_dt(last_ts_str)
+                if last_dt:
+                    delta = (now_dt - last_dt).total_seconds()
+                    if delta < 60:
+                        return jsonify({"recognized": True, "employee_id": numeric_eid, "name": name, "confidence": float(conf), "status": "Debounced (Wait 1 min)"}), 200
+                    next_status = "Check Out" if last_status in ["Check In", "Late Check In"] else "Check In"
             except:
                 pass
 
-        # Calculate if late (Only apply to the FIRST attendance of the day)
+        # Calculate if late (Only apply to the FIRST attendance of the day in IST)
         if next_status == "Check In":
-            today_str = now_dt.date().isoformat()
-            has_attendance_today = db.attendance.find_one({
-                "employee_id": numeric_eid,
-                "timestamp": {"$regex": f"^{today_str}"}
-            })
+            start_of_today_ist = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_today_ist = start_of_today_ist + datetime.timedelta(days=1)
+            
+            # Fetch recent logs to robustly scan for today's attendance regardless of offsets in DB
+            recent_logs = list(db.attendance.find({"employee_id": numeric_eid}).sort("timestamp", -1).limit(10))
+            
+            has_attendance_today = False
+            for log in recent_logs:
+                log_dt = parse_dt(log.get("timestamp"))
+                if log_dt:
+                    log_dt_local = log_dt.astimezone(IST)
+                    if start_of_today_ist <= log_dt_local < end_of_today_ist:
+                        has_attendance_today = True
+                        break
             
             if not has_attendance_today: # First time attending today
                 shift_start_str = employee.get("shift_start", "09:00")
                 try:
                     h, m = map(int, shift_start_str.split(':'))
-                    expected_time = now_dt.replace(hour=h, minute=m, second=0, microsecond=0)
+                    expected_time = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
                     grace_time = expected_time + datetime.timedelta(minutes=15)
-                    if now_dt > grace_time:
+                    if now_local > grace_time:
                         next_status = "Late Check In"
                 except:
                     pass
@@ -480,6 +591,15 @@ def recognize_face():
         db.attendance.insert_one({
             "id": attendance_id,
             "employee_id": numeric_eid,
+            "name": name,
+            "timestamp": ts,
+            "status": next_status
+        })
+        
+        # Broadcast real-time attendance marked event
+        broadcast_sse("attendance_marked", {
+            "id": int(attendance_id),
+            "employee_id": int(numeric_eid),
             "name": name,
             "timestamp": ts,
             "status": next_status
@@ -498,24 +618,40 @@ def attendance_record():
     formatted_records = []
     
     try:
-        if period == "daily":
-            today = datetime.date.today().isoformat()
-            query["timestamp"] = {"$regex": f"^{today}"}
-        elif period in ["weekly", "monthly"]:
-            days = 7 if period == "weekly" else 30
-            start_dt = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat()
-            query["timestamp"] = {"$gte": start_dt}
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        now_local = now_dt.astimezone(IST)
 
         cursor = db.attendance.find(query).sort("timestamp", -1).limit(5000)
         
         for r in cursor:
-            formatted_records.append([
-                r.get("id"),
-                r.get("employee_id"),
-                r.get("name"),
-                r.get("timestamp"),
-                r.get("status", "Check In")
-            ])
+            ts_str = r.get("timestamp")
+            dt = parse_dt(ts_str)
+            if dt:
+                dt_local = dt.astimezone(IST)
+                
+                # Apply timezone-accurate period filtering
+                if period == "daily":
+                    if dt_local.date() != now_local.date():
+                        continue
+                elif period in ["weekly", "monthly"]:
+                    days = 7 if period == "weekly" else 30
+                    if (now_dt - dt).days >= days:
+                        continue
+                
+                date_str = dt_local.strftime("%Y-%m-%d")
+                time_str = dt_local.strftime("%I:%M:%S %p")
+                if time_str.startswith("0"):
+                    time_str = time_str[1:]
+
+                formatted_records.append([
+                    r.get("id"),
+                    r.get("employee_id"),
+                    r.get("name"),
+                    date_str,
+                    r.get("status", "Check In"),
+                    time_str
+                ])
     except Exception as e:
         app.logger.error("DB Error in attendance_record: %s", e)
         
@@ -527,8 +663,16 @@ def download_csv():
     cursor = db.attendance.find({}).sort("timestamp", -1)
     output = io.StringIO()
     output.write("id,employee_id,name,timestamp,status\n")
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     for r in cursor:
-        output.write(f'{r.get("id")},{r.get("employee_id")},{r.get("name")},{r.get("timestamp")},{r.get("status", "N/A")}\n')
+        ts_str = r.get("timestamp")
+        dt = parse_dt(ts_str)
+        if dt:
+            dt_local = dt.astimezone(IST)
+            ts_formatted = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            ts_formatted = ts_str
+        output.write(f'{r.get("id")},{r.get("employee_id")},{r.get("name")},{ts_formatted},{r.get("status", "N/A")}\n')
     
     mem = io.BytesIO()
     mem.write(output.getvalue().encode("utf-8"))
@@ -613,8 +757,9 @@ def delete_employee(eid):
 def payroll_page():
     # Optional month filter, defaults to current month
     month_str = request.args.get("month")
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     if not month_str:
-        month_str = datetime.datetime.now().strftime("%Y-%m")
+        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     
     payroll_data = []
     
@@ -643,17 +788,18 @@ def payroll_page():
             
             for r in records:
                 status = r.get("status", "")
-                ts = datetime.datetime.fromisoformat(r["timestamp"])
-                if status in ["Check In", "Late Check In"]:
-                    last_checkin_time = ts
-                elif status == "Check Out":
-                    if last_checkin_time:
-                        # check if same day
-                        if last_checkin_time.date() == ts.date():
-                            delta = (ts - last_checkin_time).total_seconds()
-                            if delta > 0:
-                                total_seconds += delta
-                        last_checkin_time = None
+                ts = parse_dt(r["timestamp"])
+                if ts:
+                    if status in ["Check In", "Late Check In"]:
+                        last_checkin_time = ts
+                    elif status == "Check Out":
+                        if last_checkin_time:
+                            # check if same day in IST
+                            if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
+                                delta = (ts - last_checkin_time).total_seconds()
+                                if delta > 0:
+                                    total_seconds += delta
+                            last_checkin_time = None
                         
             total_hours = total_seconds / 3600.0
             rate = emp.get("hourly_rate", 0.0)
@@ -675,8 +821,9 @@ def payroll_page():
 @app.route("/download_payroll_csv", methods=["GET"])
 def download_payroll_csv():
     month_str = request.args.get("month")
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     if not month_str:
-        month_str = datetime.datetime.now().strftime("%Y-%m")
+        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     
     query = {"timestamp": {"$regex": f"^{month_str}"}}
     attendance_records = list(db.attendance.find(query).sort([("employee_id", 1), ("timestamp", 1)]))
@@ -701,16 +848,17 @@ def download_payroll_csv():
         
         for r in records:
             status = r.get("status", "")
-            ts = datetime.datetime.fromisoformat(r["timestamp"])
-            if status in ["Check In", "Late Check In"]:
-                last_checkin_time = ts
-            elif status == "Check Out":
-                if last_checkin_time:
-                    if last_checkin_time.date() == ts.date():
-                        delta = (ts - last_checkin_time).total_seconds()
-                        if delta > 0:
-                            total_seconds += delta
-                    last_checkin_time = None
+            ts = parse_dt(r["timestamp"])
+            if ts:
+                if status in ["Check In", "Late Check In"]:
+                    last_checkin_time = ts
+                elif status == "Check Out":
+                    if last_checkin_time:
+                        if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
+                            delta = (ts - last_checkin_time).total_seconds()
+                            if delta > 0:
+                                total_seconds += delta
+                        last_checkin_time = None
                     
         total_hours = total_seconds / 3600.0
         rate = emp.get("hourly_rate", 0.0)
@@ -727,8 +875,9 @@ def download_payroll_csv():
 @app.route("/performance", methods=["GET"])
 def performance_page():
     month_str = request.args.get("month")
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     if not month_str:
-        month_str = datetime.datetime.now().strftime("%Y-%m")
+        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     
     performance_data = []
     
@@ -758,20 +907,22 @@ def performance_page():
             
             for r in records:
                 status = r.get("status", "")
-                ts = datetime.datetime.fromisoformat(r["timestamp"])
-                day_str = ts.date().isoformat()
-                
-                if status in ["Check In", "Late Check In"]:
-                    days_present.add(day_str)
-                    if status == "Late Check In":
-                        days_late.add(day_str)
-                    last_checkin_time = ts
-                elif status == "Check Out":
-                    if last_checkin_time and last_checkin_time.date() == ts.date():
-                        delta = (ts - last_checkin_time).total_seconds()
-                        if delta > 0:
-                            total_seconds += delta
-                    last_checkin_time = None
+                ts = parse_dt(r["timestamp"])
+                if ts:
+                    day_str = ts.astimezone(IST).date().isoformat()
+                    
+                    if status in ["Check In", "Late Check In"]:
+                        days_present.add(day_str)
+                        if status == "Late Check In":
+                            days_late.add(day_str)
+                        last_checkin_time = ts
+                    elif status == "Check Out":
+                        if last_checkin_time:
+                            if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
+                                delta = (ts - last_checkin_time).total_seconds()
+                                if delta > 0:
+                                    total_seconds += delta
+                            last_checkin_time = None
                     
             total_hours = total_seconds / 3600.0
             num_days_present = len(days_present)
@@ -863,7 +1014,8 @@ def api_sidebar_employee(direction, current_eid):
     target_eid = eids[idx]
     
     emp = db.employees.find_one({"id": target_eid})
-    month_str = datetime.datetime.now().strftime("%Y-%m")
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     query = {"employee_id": target_eid, "timestamp": {"$regex": f"^{month_str}"}}
     records = list(db.attendance.find(query).sort("timestamp", 1))
     
@@ -871,13 +1023,15 @@ def api_sidebar_employee(direction, current_eid):
     last_checkin_time = None
     for r in records:
         status = r.get("status", "")
-        ts = datetime.datetime.fromisoformat(r["timestamp"])
-        if status in ["Check In", "Late Check In"]:
-            last_checkin_time = ts
-        elif status == "Check Out":
-            if last_checkin_time and last_checkin_time.date() == ts.date():
-                total_seconds += (ts - last_checkin_time).total_seconds()
-                last_checkin_time = None
+        ts = parse_dt(r["timestamp"])
+        if ts:
+            if status in ["Check In", "Late Check In"]:
+                last_checkin_time = ts
+            elif status == "Check Out":
+                if last_checkin_time:
+                    if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
+                        total_seconds += (ts - last_checkin_time).total_seconds()
+                        last_checkin_time = None
                 
     total_hours = total_seconds / 3600.0
     rate = emp.get("hourly_rate", 0.0)

@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", () => {
       chart.update();
     }
   }
+  window.updateDashboardChart = updateChart;
   updateChart();
   setInterval(updateChart, 10000);
 });
