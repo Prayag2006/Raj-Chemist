@@ -169,7 +169,7 @@
               this.onerror = null;
               this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&background=random`;
           };
-          avatar.src = `/api/employee_image/${data.eid}?t=${new Date().getTime()}`;
+          avatar.src = `/api/employee_image/${data.eid}`;
       } catch (e) {
           console.error(e);
       }

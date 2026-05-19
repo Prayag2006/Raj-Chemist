@@ -81,11 +81,23 @@ db = client['attendance_system'] # Database Name
 # Create database indexes for maximum query performance
 try:
     db.employees.create_index("id", unique=True)
-    db.attendance.create_index([("employee_id", 1), ("timestamp", 1)])
-    db.attendance.create_index("timestamp")
-    print("Database indexes verified/created successfully.")
 except Exception as e:
-    print(f"Index creation warning: {e}")
+    print(f"Employees id index warning: {e}")
+
+try:
+    db.attendance.create_index([("employee_id", 1), ("timestamp", 1)])
+except Exception as e:
+    print(f"Attendance compound index warning: {e}")
+
+try:
+    db.attendance.create_index("timestamp")
+except Exception as e:
+    print(f"Attendance timestamp index warning: {e}")
+
+try:
+    db.face_images.create_index("employee_id")
+except Exception as e:
+    print(f"Face images index warning: {e}")
 
 # Try to restore the model.pkl from MongoDB asynchronously in the background so it doesn't block server startup
 def restore_model_async():
