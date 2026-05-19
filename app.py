@@ -36,6 +36,24 @@ def parse_dt(ts_str):
         return None
 
 
+def get_month_range_query(month_str):
+    try:
+        parts = month_str.split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+        start = f"{year:04d}-{month:02d}-01T00:00:00"
+        if month == 12:
+            next_year = year + 1
+            next_month = 1
+        else:
+            next_year = year
+            next_month = month + 1
+        end = f"{next_year:04d}-{next_month:02d}-01T00:00:00"
+        return {"$gte": start, "$lt": end}
+    except Exception:
+        return {"$regex": f"^{month_str}"}
+
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_DIR = os.path.join(APP_DIR, "dataset")
 try:
@@ -735,7 +753,7 @@ def payroll_page():
     
     try:
         # We want attendance records matching this month prefix in ISO format
-        query = {"timestamp": {"$regex": f"^{month_str}"}}
+        query = {"timestamp": get_month_range_query(month_str)}
         attendance_records = list(db.attendance.find(query).sort([("employee_id", 1), ("timestamp", 1)]))
         
         employees = list(db.employees.find({}))
@@ -795,7 +813,7 @@ def download_payroll_csv():
     if not month_str:
         month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     
-    query = {"timestamp": {"$regex": f"^{month_str}"}}
+    query = {"timestamp": get_month_range_query(month_str)}
     attendance_records = list(db.attendance.find(query).sort([("employee_id", 1), ("timestamp", 1)]))
     
     employees = list(db.employees.find({}))
@@ -853,7 +871,7 @@ def performance_page():
     
     try:
         # Get all records for selected month
-        query = {"timestamp": {"$regex": f"^{month_str}"}}
+        query = {"timestamp": get_month_range_query(month_str)}
         attendance_records = list(db.attendance.find(query).sort("timestamp", 1))
         
         employees = list(db.employees.find({}))
@@ -986,7 +1004,7 @@ def api_sidebar_employee(direction, current_eid):
     emp = db.employees.find_one({"id": target_eid})
     IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     month_str = datetime.datetime.now(IST).strftime("%Y-%m")
-    query = {"employee_id": target_eid, "timestamp": {"$regex": f"^{month_str}"}}
+    query = {"employee_id": target_eid, "timestamp": get_month_range_query(month_str)}
     records = list(db.attendance.find(query).sort("timestamp", 1))
     
     total_seconds = 0
