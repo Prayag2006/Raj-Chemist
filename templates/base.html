@@ -16,6 +16,11 @@
   
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   
+  <!-- DNS prefetch for faster CDN loading -->
+  <link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+  <link rel="dns-prefetch" href="//cdnjs.cloudflare.com">
+  <link rel="dns-prefetch" href="//fonts.googleapis.com">
+
   {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -175,9 +180,23 @@
       }
   }
 
-  // Load sidebar employee stats asynchronously in the background for instant page loads
+  // Load sidebar employee stats asynchronously - only when a valid employee exists
   document.addEventListener("DOMContentLoaded", () => {
-      changeSidebarEmployee("current");
+      if (currentSidebarEid && currentSidebarEid > 0) {
+          changeSidebarEmployee("current");
+      } else {
+          // No employee selected yet - fetch latest employee id (fast, single field query)
+          fetch("/api/first_employee")
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data && data.eid) {
+                  currentSidebarEid = data.eid;
+                  document.cookie = "sidebar_eid=" + data.eid + "; path=/; max-age=86400";
+                  changeSidebarEmployee("current");
+              }
+            })
+            .catch(() => {});
+      }
   });
   </script>
   

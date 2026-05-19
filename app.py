@@ -323,26 +323,28 @@ def mock_attendance():
         "status": status
     })
 
-# Dashboard stats API (last 30 days counts)
+# Dashboard stats API (last 30 days counts) - Optimized: no Pandas, pure MongoDB aggregation
 @app.route("/attendance_stats")
 def attendance_stats():
-    import pandas as pd
-    from datetime import date, timedelta
-    
-    # Safe fallback for days
     days = [(datetime.date.today() - datetime.timedelta(days=i)).strftime("%d-%b") for i in range(29, -1, -1)]
     
     try:
-        # Fetch all logs
-        logs = list(db.attendance.find({}, {"timestamp": 1, "_id": 0}))
-        df = pd.DataFrame(logs)
+        # Use MongoDB aggregation pipeline - much faster than fetching all records
+        start_dt = datetime.datetime.combine(
+            datetime.date.today() - datetime.timedelta(days=29),
+            datetime.time.min
+        ).isoformat()
         
-        if df.empty:
-            return jsonify({"dates": days, "counts": [0]*30})
+        pipeline = [
+            {"$match": {"timestamp": {"$gte": start_dt}}},
+            {"$project": {"date_prefix": {"$substr": ["$timestamp", 0, 10]}}},
+            {"$group": {"_id": "$date_prefix", "count": {"$sum": 1}}}
+        ]
+        results = list(db.attendance.aggregate(pipeline))
+        count_map = {r["_id"]: r["count"] for r in results}
         
-        df['date'] = pd.to_datetime(df['timestamp']).dt.date
         last_30 = [(datetime.date.today() - datetime.timedelta(days=i)) for i in range(29, -1, -1)]
-        counts = [int(df[df['date'] == d].shape[0]) for d in last_30]
+        counts = [count_map.get(d.strftime("%Y-%m-%d"), 0) for d in last_30]
         dates = [d.strftime("%d-%b") for d in last_30]
         return jsonify({"dates": dates, "counts": counts})
     except Exception as e:
@@ -636,7 +638,6 @@ def recognize_face():
 @app.route("/attendance_record", methods=["GET"])
 def attendance_record():
     period = request.args.get("period", "all")
-    query = {}
     formatted_records = []
     
     try:
@@ -644,23 +645,34 @@ def attendance_record():
         now_dt = datetime.datetime.now(datetime.timezone.utc)
         now_local = now_dt.astimezone(IST)
 
-        cursor = db.attendance.find(query).sort("timestamp", -1).limit(5000)
+        # Build DB-side query filter instead of Python-side filtering (much faster)
+        query = {}
+        limit = 500  # Default limit for 'all'
+        if period == "daily":
+            # Today in IST: get start/end as ISO strings
+            start_of_today_ist = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_today_ist = start_of_today_ist + datetime.timedelta(days=1)
+            # Convert to UTC for query
+            start_utc = start_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+            end_utc = end_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+            query = {"timestamp": {"$gte": start_utc, "$lt": end_utc}}
+            limit = 500
+        elif period == "weekly":
+            start_utc = (now_dt - datetime.timedelta(days=7)).isoformat()
+            query = {"timestamp": {"$gte": start_utc}}
+            limit = 1000
+        elif period == "monthly":
+            start_utc = (now_dt - datetime.timedelta(days=30)).isoformat()
+            query = {"timestamp": {"$gte": start_utc}}
+            limit = 2000
+
+        cursor = db.attendance.find(query).sort("timestamp", -1).limit(limit)
         
         for r in cursor:
             ts_str = r.get("timestamp")
             dt = parse_dt(ts_str)
             if dt:
                 dt_local = dt.astimezone(IST)
-                
-                # Apply timezone-accurate period filtering
-                if period == "daily":
-                    if dt_local.date() != now_local.date():
-                        continue
-                elif period in ["weekly", "monthly"]:
-                    days = 7 if period == "weekly" else 30
-                    if (now_dt - dt).days >= days:
-                        continue
-                
                 date_str = dt_local.strftime("%Y-%m-%d")
                 time_str = dt_local.strftime("%I:%M:%S %p")
                 if time_str.startswith("0"):
@@ -761,6 +773,15 @@ def employees_list():
             "created_at": r.get("created_at")
         })
     return jsonify({"employees": data})
+
+# Fast endpoint: returns only the latest employee id (for sidebar init)
+@app.route("/api/first_employee")
+def api_first_employee():
+    emp = db.employees.find_one({}, {"id": 1}, sort=[("id", -1)])
+    if emp:
+        return jsonify({"eid": emp["id"]})
+    return jsonify({"eid": None}), 404
+
 
 @app.route("/employees/<int:eid>", methods=["DELETE"])
 def delete_employee(eid):
@@ -1032,14 +1053,19 @@ def api_sidebar_employee(direction, current_eid):
         idx = (idx + 1) % len(eids)
     elif direction == "prev":
         idx = (idx - 1) % len(eids)
+    # 'current' stays at same idx - just refreshes stats for current employee
         
     target_eid = eids[idx]
     
     emp = db.employees.find_one({"id": target_eid})
+    if not emp:
+        return jsonify({"error": "Employee not found"}), 404
+
     IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     month_str = datetime.datetime.now(IST).strftime("%Y-%m")
     query = {"employee_id": target_eid, "timestamp": get_month_range_query(month_str)}
-    records = list(db.attendance.find(query).sort("timestamp", 1))
+    # Only fetch fields we need - faster
+    records = list(db.attendance.find(query, {"status": 1, "timestamp": 1, "_id": 0}).sort("timestamp", 1))
     
     total_seconds = 0
     last_checkin_time = None
@@ -1059,7 +1085,7 @@ def api_sidebar_employee(direction, current_eid):
     rate = emp.get("hourly_rate", 0.0)
     salary = total_hours * rate
     
-    return jsonify({
+    resp = jsonify({
         "name": emp.get("name", "Unknown"),
         "role": emp.get("designation", "Employee") or "Employee",
         "dept": emp.get("department", "N/A") or "N/A",
@@ -1069,6 +1095,8 @@ def api_sidebar_employee(direction, current_eid):
         "salary": f"${salary:.2f}",
         "eid": target_eid
     })
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 # -------- System Settings --------
 @app.route("/settings", methods=["GET", "POST"])
