@@ -164,71 +164,30 @@ def check_wifi_access(client_ip):
 @app.context_processor
 def inject_sidebar_data():
     default_sb = {
-        "sb_name": "No Data",
-        "sb_role": "-",
+        "sb_name": "Loading...",
+        "sb_role": "Loading...",
         "sb_total_hours": "0.00",
         "sb_regular_hours": "0.00",
         "sb_rate": "$0.00",
         "sb_salary": "$0.00",
-        "sb_dept": "-",
+        "sb_dept": "Loading...",
         "sb_eid": 0
     }
     try:
         eid_cookie = request.cookies.get("sidebar_eid")
-        emp = None
-        
         if eid_cookie:
-            try:
-                emp = db.employees.find_one({"id": int(eid_cookie)})
-            except:
-                emp = None
-                
-        if not emp:
-            latest_record = db.attendance.find_one({}, sort=[("timestamp", -1)])
-            if latest_record:
-                emp = db.employees.find_one({"id": latest_record["employee_id"]})
-                
-        if not emp:
-            emp = db.employees.find_one({})
-            
-        if not emp:
-            return default_sb
-            
-        eid = emp["id"]
-        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
-        query = {"employee_id": eid, "timestamp": {"$regex": f"^{month_str}"}}
-        records = list(db.attendance.find(query).sort("timestamp", 1))
-        
-        total_seconds = 0
-        last_checkin_time = None
-        for r in records:
-            status = r.get("status", "")
-            ts = parse_dt(r["timestamp"])
-            if ts:
-                if status in ["Check In", "Late Check In"]:
-                    last_checkin_time = ts
-                elif status == "Check Out":
-                    if last_checkin_time:
-                        total_seconds += (ts - last_checkin_time).total_seconds()
-                        last_checkin_time = None
-                    
-        total_hours = total_seconds / 3600.0
-        rate = emp.get("hourly_rate", 0.0)
-        salary = total_hours * rate
-        
-        return {
-            "sb_name": emp.get("name", "Unknown"),
-            "sb_role": emp.get("designation", "Employee") or "Employee",
-            "sb_dept": emp.get("department", "N/A") or "N/A",
-            "sb_total_hours": f"{total_hours:.2f}",
-            "sb_regular_hours": f"{total_hours:.2f}",
-            "sb_rate": f"${rate:.2f}",
-            "sb_salary": f"${salary:.2f}",
-            "sb_eid": eid
-        }
-    except Exception as e:
-        app.logger.error("DB Error in inject_sidebar_data: %s", e)
+            return {
+                "sb_name": "Loading...",
+                "sb_role": "Loading...",
+                "sb_total_hours": "0.00",
+                "sb_regular_hours": "0.00",
+                "sb_rate": "$0.00",
+                "sb_salary": "$0.00",
+                "sb_dept": "Loading...",
+                "sb_eid": int(eid_cookie)
+            }
+        return default_sb
+    except Exception:
         return default_sb
 
 # ---------- Routes ----------

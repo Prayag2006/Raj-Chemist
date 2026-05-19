@@ -146,7 +146,6 @@
   <script>
   let currentSidebarEid = {{ sb_eid|default(0) }};
   async function changeSidebarEmployee(direction) {
-      if (currentSidebarEid === 0) return;
       try {
           const res = await fetch(`/api/sidebar_employee/${direction}/${currentSidebarEid}`);
           if (!res.ok) return;
@@ -175,6 +174,11 @@
           console.error(e);
       }
   }
+
+  // Load sidebar employee stats asynchronously in the background for instant page loads
+  document.addEventListener("DOMContentLoaded", () => {
+      changeSidebarEmployee("current");
+  });
   </script>
   
   <script src="{{ url_for('static', filename='js/realtime.js') }}"></script>
