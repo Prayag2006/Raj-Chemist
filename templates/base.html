@@ -100,18 +100,6 @@
           </div>
           <div class="col-6">
             <div class="stat-box">
-              <div class="val" id="sidebar_rate">{{ sb_rate|default('₹0.00') }}</div>
-              <div class="key">Hourly Rate</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="stat-box">
-              <div class="val" id="sidebar_salary">{{ sb_salary|default('₹0.00') }}</div>
-              <div class="key">Salary</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="stat-box">
               <div class="val" id="sidebar_dept">{{ sb_dept|default('-') }}</div>
               <div class="key">Department</div>
             </div>
@@ -156,8 +144,6 @@
       document.getElementById("sidebar_role").innerText = "Admin Dashboard";
       document.getElementById("sidebar_total_hours").innerText = "0.00";
       document.getElementById("sidebar_regular_hours").innerText = "0.00 hrs";
-      document.getElementById("sidebar_rate").innerText = "₹0.00";
-      document.getElementById("sidebar_salary").innerText = "₹0.00";
       document.getElementById("sidebar_dept").innerText = "-";
       const avatar = document.getElementById("sidebar_avatar");
       if (avatar) {
@@ -181,8 +167,6 @@
           document.getElementById("sidebar_role").innerText = data.role;
           document.getElementById("sidebar_total_hours").innerText = data.total_hours;
           document.getElementById("sidebar_regular_hours").innerText = data.regular_hours;
-          document.getElementById("sidebar_rate").innerText = data.rate;
-          document.getElementById("sidebar_salary").innerText = data.salary;
           document.getElementById("sidebar_dept").innerText = data.dept;
           
           // Initials badge was removed from DOM
