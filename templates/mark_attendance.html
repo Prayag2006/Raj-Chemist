@@ -59,10 +59,8 @@
         <h6 class="fw-bold mb-3 text-center" style="letter-spacing:0.5px; color:var(--color-text-dark);"><i class="fa-solid fa-shield-halved text-primary me-2"></i>Secure PIN Login</h6>
         <form id="passcodeForm">
           <div class="mb-3">
-            <label class="small fw-bold text-muted mb-1">Select Employee</label>
-            <select class="form-select form-control" id="employeeSelect" name="employee_id" required>
-              <option value="" disabled selected>Choose your profile...</option>
-            </select>
+            <label class="small fw-bold text-muted mb-1">Employee Name</label>
+            <input type="text" class="form-control" id="employeeNameInput" name="employee_name" placeholder="Enter your registered name" required>
           </div>
           <div class="mb-3">
             <label class="small fw-bold text-muted mb-1">Enter Passcode / PIN</label>
@@ -131,31 +129,6 @@
           if (typeof stopCamera === "function") {
               stopCamera("Camera stopped for PIN entry");
           }
-          // Fetch employees list to populate dropdown if empty
-          populateEmployeeDropdown();
-      }
-  }
-
-  let dropdownPopulated = false;
-  async function populateEmployeeDropdown() {
-      if (dropdownPopulated) return;
-      try {
-          const res = await fetch('/employees');
-          if (res.ok) {
-              const data = await res.json();
-              const select = document.getElementById("employeeSelect");
-              // Clear previous dynamic options except the default
-              select.innerHTML = '<option value="" disabled selected>Choose your profile...</option>';
-              data.employees.forEach(emp => {
-                  const opt = document.createElement("option");
-                  opt.value = emp.id;
-                  opt.innerText = `${emp.name} (#${emp.emp_id})`;
-                  select.appendChild(opt);
-              });
-              dropdownPopulated = true;
-          }
-      } catch (err) {
-          console.error("Failed to load employees list for passcode dropdown:", err);
       }
   }
 

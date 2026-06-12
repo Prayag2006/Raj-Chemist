@@ -735,18 +735,18 @@ def mark_attendance_passcode():
     if not allowed:
         return jsonify({"success": False, "error": message}), 403
 
-    employee_id = request.form.get("employee_id")
+    employee_name = request.form.get("employee_name", "").strip()
     password = request.form.get("password", "").strip()
 
-    if not employee_id or not password:
-        return jsonify({"success": False, "error": "Employee selection and PIN are required."}), 400
+    if not employee_name or not password:
+        return jsonify({"success": False, "error": "Employee name and PIN are required."}), 400
 
     try:
-        numeric_eid = int(employee_id)
-        employee = db.employees.find_one({"id": numeric_eid})
+        employee = db.employees.find_one({"name": {"$regex": f"^{employee_name}$", "$options": "i"}})
         if not employee:
-            return jsonify({"success": False, "error": "Employee not found."}), 404
+            return jsonify({"success": False, "error": "Employee name not found."}), 404
             
+        numeric_eid = employee["id"]
         stored_password = employee.get("password", "").strip()
         if stored_password != password:
             return jsonify({"success": False, "error": "Invalid PIN/Passcode. Please try again."}), 401
