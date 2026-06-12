@@ -1390,6 +1390,11 @@ def api_sidebar_employee(direction, current_eid):
             "salary": f"₹{salary:.2f}",
             "eid": target_eid
         })
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    except Exception as e:
+        app.logger.error("Error in api_sidebar_employee: %s", e)
+        return jsonify({"error": str(e)}), 500
 # -------- WhatsApp Helpers & Integration --------
 def generate_daily_attendance_report():
     IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
