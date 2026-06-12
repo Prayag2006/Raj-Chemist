@@ -149,10 +149,10 @@
           if (res.ok && data.success) {
               const statusText = data.status || "Check In";
               let greeting = "";
-              if (statusText === "Check In" || statusText === "Late Check In") {
+               if (statusText === "Check In" || statusText === "Late Check In") {
                   greeting = `Welcome, ${data.name}! 👋`;
-              } else if (statusText === "Check Out") {
-                  greeting = `Goodbye, ${data.name}! 🚪`;
+              } else if (statusText === "Check Out" || statusText === "Early Out") {
+                  greeting = `Goodbye, ${data.name}! 🚪 (${statusText})`;
               } else {
                   greeting = `${data.name}: ${statusText}`;
               }

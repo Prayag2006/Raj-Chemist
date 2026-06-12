@@ -56,6 +56,10 @@
                     {% set border_cls = "border-checkin" %}
                     {% set text_cls = "text-checkin" %}
                     {% set icon = "fa-arrow-right-to-bracket" %}
+                {% elif r[4] == "Early Out" %}
+                    {% set border_cls = "border-late" %}
+                    {% set text_cls = "text-late" %}
+                    {% set icon = "fa-arrow-right-from-bracket" %}
                 {% else %}
                     {% set border_cls = "border-checkout" %}
                     {% set text_cls = "text-checkout" %}

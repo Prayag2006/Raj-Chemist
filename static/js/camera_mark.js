@@ -98,8 +98,8 @@ async function captureAndRecognize() {
           let greeting = "";
           if (statusText === "Check In" || statusText === "Late Check In") {
               greeting = `Welcome, ${j.name}! 👋`;
-          } else if (statusText === "Check Out") {
-              greeting = `Goodbye, ${j.name}! 🚪`;
+          } else if (statusText === "Check Out" || statusText === "Early Out") {
+              greeting = `Goodbye, ${j.name}! 🚪 (${statusText})`;
           } else {
               greeting = `${j.name}: ${statusText}`;
           }
@@ -110,7 +110,12 @@ async function captureAndRecognize() {
           const li = document.createElement("li");
           li.className = "list-group-item d-flex justify-content-between align-items-center bg-light";
           
-          const badgeColor = (statusText === "Check In" || statusText === "Late Check In") ? "bg-success" : "bg-warning text-dark";
+          let badgeColor = "bg-warning text-dark";
+          if (statusText === "Check In" || statusText === "Late Check In") {
+              badgeColor = "bg-success";
+          } else if (statusText === "Early Out") {
+              badgeColor = "bg-danger";
+          }
           li.innerHTML = `
             <span><strong>${j.name}</strong> — ${new Date().toLocaleTimeString()}</span>
             <span class="badge ${badgeColor}">${statusText}</span>

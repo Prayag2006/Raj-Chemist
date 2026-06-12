@@ -27,6 +27,7 @@
       </div>
 
       <form method="POST" action="/settings">
+        <input type="hidden" name="form_type" value="network">
         <div class="mb-4">
           <div class="form-check form-switch">
             <input class="form-check-input" type="checkbox" role="switch" id="wifi_restriction_enabled" name="wifi_restriction_enabled" {% if config.wifi_restriction_enabled %}checked{% endif %}>
@@ -74,7 +75,80 @@
       </form>
     </div>
 
-    <div class="modern-card border-0 bg-warning bg-opacity-10 shadow-none">
+    <div class="modern-card mt-4">
+      <div class="d-flex align-items-center border-bottom pb-3 mb-4">
+        <div class="icon-box me-3 bg-success bg-opacity-10 text-success p-3 rounded-3">
+          <i class="fa-brands fa-whatsapp fa-lg"></i>
+        </div>
+        <div>
+          <h5 class="mb-0">WhatsApp Daily Attendance Integration</h5>
+          <p class="small text-muted mb-0">Automatically send daily attendance summaries to a WhatsApp Group using Green API.</p>
+        </div>
+      </div>
+
+      <form method="POST" action="/settings" id="whatsappSettingsForm">
+        <input type="hidden" name="form_type" value="whatsapp">
+        
+        <div class="mb-4">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="whatsapp_enabled" name="whatsapp_enabled" {% if whatsapp_config.enabled %}checked{% endif %}>
+            <label class="form-check-label fw-bold" for="whatsapp_enabled">Enable Automatic Daily Reports</label>
+            <p class="text-muted small mt-1 mb-0">When enabled, the system will send the attendance summary to the specified group at the scheduled time.</p>
+          </div>
+        </div>
+
+        <div id="whatsappSettingsGroup" class="ps-3 border-start border-2 {% if not whatsapp_config.enabled %}opacity-50{% endif %}" style="transition: opacity 0.3s ease;">
+          <div class="mb-4">
+            <label for="whatsapp_api_url" class="form-label small fw-bold text-muted">Green API URL (apiUrl)</label>
+            <input type="text" class="form-control" id="whatsapp_api_url" name="whatsapp_api_url" value="{{ whatsapp_config.api_url or 'https://api.greenapi.com' }}" placeholder="e.g., https://7107.api.greenapi.com" required>
+            <div class="form-text text-muted" style="font-size: 11px;">
+              Copy the <code>apiUrl</code> value from your Green API console dashboard (e.g. <code>https://7107.api.greenapi.com</code>).
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-md-6">
+              <label for="whatsapp_id_instance" class="form-label small fw-bold text-muted">Green API Instance ID</label>
+              <input type="text" class="form-control" id="whatsapp_id_instance" name="whatsapp_id_instance" value="{{ whatsapp_config.id_instance }}" placeholder="e.g., 1101123456" required>
+            </div>
+            <div class="col-md-6">
+              <label for="whatsapp_api_token" class="form-label small fw-bold text-muted">Green API Token Instance</label>
+              <input type="password" class="form-control" id="whatsapp_api_token" name="whatsapp_api_token" value="{{ whatsapp_config.api_token }}" placeholder="e.g., d75bbf32d6f2..." required>
+            </div>
+          </div>
+
+          <div class="row g-3 mb-4">
+            <div class="col-md-8">
+              <label for="whatsapp_group_id" class="form-label small fw-bold text-muted">WhatsApp Group Chat ID</label>
+              <input type="text" class="form-control" id="whatsapp_group_id" name="whatsapp_group_id" value="{{ whatsapp_config.group_id }}" placeholder="e.g., 120363043968066561@g.us" required>
+              <div class="form-text text-muted" style="font-size: 11px;">
+                Must end with <code>@g.us</code> for groups (or <code>@c.us</code> for direct phone numbers).
+              </div>
+            </div>
+            <div class="col-md-4">
+              <label for="whatsapp_send_time" class="form-label small fw-bold text-muted">Scheduled Send Time (IST)</label>
+              <input type="time" class="form-control" id="whatsapp_send_time" name="whatsapp_send_time" value="{{ whatsapp_config.send_time }}" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="border-top pt-3 d-flex justify-content-between flex-wrap gap-2">
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-success btn-sm" id="btnTestWhatsapp" {% if not whatsapp_config.id_instance or not whatsapp_config.api_token or not whatsapp_config.group_id %}disabled{% endif %}>
+              <i class="fa-solid fa-flask me-1"></i> Send Test Message
+            </button>
+            <button type="button" class="btn btn-success btn-sm" id="btnSendAttendanceNow" {% if not whatsapp_config.enabled %}disabled{% endif %}>
+              <i class="fa-solid fa-paper-plane me-1"></i> Send Today's Report Now
+            </button>
+          </div>
+          <button type="submit" class="btn-mock btn-mock-primary">
+            <i class="fa-solid fa-save me-1"></i> Save WhatsApp Settings
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modern-card border-0 bg-warning bg-opacity-10 shadow-none mt-4">
       <div class="d-flex align-items-start">
         <i class="fa-solid fa-triangle-exclamation text-warning me-3 mt-1 fa-lg"></i>
         <div>
@@ -89,6 +163,7 @@
 </div>
 
 <script>
+// Wi-Fi settings toggling
 document.getElementById('wifi_restriction_enabled').addEventListener('change', function() {
     const group = document.getElementById('networkSettingsGroup');
     if(this.checked) {
@@ -101,6 +176,104 @@ document.getElementById('wifi_restriction_enabled').addEventListener('change', f
 function copyIP() {
     navigator.clipboard.writeText('{{ current_ip }}');
     alert("Copied IP address: {{ current_ip }}");
+}
+
+// Toggle WhatsApp settings group opacity
+document.getElementById('whatsapp_enabled').addEventListener('change', function() {
+    const group = document.getElementById('whatsappSettingsGroup');
+    const sendNowBtn = document.getElementById('btnSendAttendanceNow');
+    if(this.checked) {
+        group.classList.remove('opacity-50');
+        sendNowBtn.removeAttribute('disabled');
+    } else {
+        group.classList.add('opacity-50');
+        sendNowBtn.setAttribute('disabled', 'true');
+    }
+});
+
+// Enable test button only if inputs are not empty
+const urlInput = document.getElementById('whatsapp_api_url');
+const idInput = document.getElementById('whatsapp_id_instance');
+const tokenInput = document.getElementById('whatsapp_api_token');
+const groupInput = document.getElementById('whatsapp_group_id');
+const testBtn = document.getElementById('btnTestWhatsapp');
+
+function validateInputsForTest() {
+    if (urlInput && urlInput.value.trim() && idInput && idInput.value.trim() && tokenInput && tokenInput.value.trim() && groupInput && groupInput.value.trim()) {
+        testBtn.removeAttribute('disabled');
+    } else {
+        testBtn.setAttribute('disabled', 'true');
+    }
+}
+if(urlInput) urlInput.addEventListener('input', validateInputsForTest);
+if(idInput) idInput.addEventListener('input', validateInputsForTest);
+if(tokenInput) tokenInput.addEventListener('input', validateInputsForTest);
+if(groupInput) groupInput.addEventListener('input', validateInputsForTest);
+
+// Send Test Message
+if(testBtn) {
+    testBtn.addEventListener('click', function() {
+        const originalText = this.innerHTML;
+        this.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> Sending...';
+        this.setAttribute('disabled', 'true');
+
+        const formData = new FormData();
+        formData.append('api_url', urlInput.value.trim());
+        formData.append('id_instance', idInput.value.trim());
+        formData.append('api_token', tokenInput.value.trim());
+        formData.append('group_id', groupInput.value.trim());
+
+        fetch('/api/test-whatsapp', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            this.innerHTML = originalText;
+            validateInputsForTest();
+            if (data.success) {
+                alert("Success: " + data.message);
+            } else {
+                alert("Error: " + data.error);
+            }
+        })
+        .catch(error => {
+            this.innerHTML = originalText;
+            validateInputsForTest();
+            alert("Error connecting to server.");
+            console.error(error);
+        });
+    });
+}
+
+// Send Today's Attendance Report Now
+const sendNowBtn = document.getElementById('btnSendAttendanceNow');
+if(sendNowBtn) {
+    sendNowBtn.addEventListener('click', function() {
+        const originalText = this.innerHTML;
+        this.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> Sending...';
+        this.setAttribute('disabled', 'true');
+
+        fetch('/api/send-daily-attendance', {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            this.innerHTML = originalText;
+            this.removeAttribute('disabled');
+            if (data.success) {
+                alert("Success: " + data.message);
+            } else {
+                alert("Error: " + data.error);
+            }
+        })
+        .catch(error => {
+            this.innerHTML = originalText;
+            this.removeAttribute('disabled');
+            alert("Error connecting to server.");
+            console.error(error);
+        });
+    });
 }
 </script>
 {% endblock %}

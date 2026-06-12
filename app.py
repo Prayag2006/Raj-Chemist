@@ -224,6 +224,32 @@ def get_network_config():
         app.logger.error("DB Error in get_network_config: %s", e)
         return default_config
 
+
+def get_whatsapp_config():
+    default_config = {
+        "_id": "whatsapp_config",
+        "enabled": False,
+        "api_url": "https://api.greenapi.com",
+        "id_instance": "",
+        "api_token": "",
+        "group_id": "",
+        "send_time": "21:00",
+        "last_sent_date": ""
+    }
+    try:
+        config = db.settings.find_one({"_id": "whatsapp_config"})
+        if not config:
+            config = default_config
+            try:
+                db.settings.insert_one(config)
+            except Exception:
+                pass
+        return config
+    except Exception as e:
+        app.logger.error("DB Error in get_whatsapp_config: %s", e)
+        return default_config
+
+
 def check_wifi_access(client_ip):
     config = get_network_config()
     if not config.get("wifi_restriction_enabled"):
@@ -298,7 +324,9 @@ def check_admin_auth():
         'api_first_employee',
         'login', 
         'logout',
-        'static'
+        'static',
+        'test_whatsapp',
+        'manual_send_attendance'
     ]
     if not request.endpoint:
         return
@@ -457,6 +485,7 @@ def add_employee():
         desig = data.get("desig", "").strip()
         joining = data.get("joining", "").strip()
         shift_start = data.get("shift_start", "09:00").strip()
+        shift_end = data.get("shift_end", "18:00").strip()
         if not name:
             return jsonify({"error": "name required"}), 400
 
@@ -479,6 +508,7 @@ def add_employee():
             "designation": desig,
             "joining_date": joining,
             "shift_start": shift_start,
+            "shift_end": shift_end,
             "hourly_rate": hourly_rate,
             "password": password,
             "created_at": now
@@ -704,6 +734,15 @@ def recognize_face():
                     if delta < 60:
                         return jsonify({"recognized": True, "employee_id": numeric_eid, "name": name, "confidence": float(conf), "status": "Debounced (Wait 1 min)"}), 200
                     next_status = "Check Out" if last_status in ["Check In", "Late Check In"] else "Check In"
+                    if next_status == "Check Out":
+                        shift_end_str = employee.get("shift_end", "18:00")
+                        try:
+                            he, me = map(int, shift_end_str.split(':'))
+                            expected_end_time = now_local.replace(hour=he, minute=me, second=0, microsecond=0)
+                            if now_local < expected_end_time:
+                                next_status = "Early Out"
+                        except:
+                            pass
             except:
                 pass
 
@@ -816,6 +855,15 @@ def mark_attendance_passcode():
                     if delta < 60:
                         return jsonify({"success": True, "employee_id": numeric_eid, "name": name, "status": "Debounced (Wait 1 min)"}), 200
                     next_status = "Check Out" if last_status in ["Check In", "Late Check In"] else "Check In"
+                    if next_status == "Check Out":
+                        shift_end_str = employee.get("shift_end", "18:00")
+                        try:
+                            he, me = map(int, shift_end_str.split(':'))
+                            expected_end_time = now_local.replace(hour=he, minute=me, second=0, microsecond=0)
+                            if now_local < expected_end_time:
+                                next_status = "Early Out"
+                        except:
+                            pass
             except:
                 pass
 
@@ -983,6 +1031,7 @@ def update_employee():
         "designation": request.form.get("designation", "").strip(),
         "joining_date": request.form.get("joining_date", ""),
         "shift_start": request.form.get("shift_start", "09:00").strip(),
+        "shift_end": request.form.get("shift_end", "18:00").strip(),
         "hourly_rate": hourly_rate,
         "password": request.form.get("password", "").strip()
     }
@@ -1007,6 +1056,7 @@ def employees_list():
             "designation": r.get("designation"),
             "joining_date": r.get("joining_date"),
             "shift_start": r.get("shift_start", "09:00"),
+            "shift_end": r.get("shift_end", "18:00"),
             "hourly_rate": r.get("hourly_rate", 0.0),
             "created_at": r.get("created_at")
         })
@@ -1073,7 +1123,7 @@ def payroll_page():
                 if ts:
                     if status in ["Check In", "Late Check In"]:
                         last_checkin_time = ts
-                    elif status == "Check Out":
+                    elif status in ["Check Out", "Early Out"]:
                         if last_checkin_time:
                             # check if same day in IST
                             if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
@@ -1133,7 +1183,7 @@ def download_payroll_csv():
             if ts:
                 if status in ["Check In", "Late Check In"]:
                     last_checkin_time = ts
-                elif status == "Check Out":
+                elif status in ["Check Out", "Early Out"]:
                     if last_checkin_time:
                         if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
                             delta = (ts - last_checkin_time).total_seconds()
@@ -1197,7 +1247,7 @@ def performance_page():
                         if status == "Late Check In":
                             days_late.add(day_str)
                         last_checkin_time = ts
-                    elif status == "Check Out":
+                    elif status in ["Check Out", "Early Out"]:
                         if last_checkin_time:
                             if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
                                 delta = (ts - last_checkin_time).total_seconds()
@@ -1313,7 +1363,7 @@ def api_sidebar_employee(direction, current_eid):
         if ts:
             if status in ["Check In", "Late Check In"]:
                 last_checkin_time = ts
-            elif status == "Check Out":
+            elif status in ["Check Out", "Early Out"]:
                 if last_checkin_time:
                     if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
                         total_seconds += (ts - last_checkin_time).total_seconds()
@@ -1333,36 +1383,248 @@ def api_sidebar_employee(direction, current_eid):
         "salary": f"₹{salary:.2f}",
         "eid": target_eid
     })
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+# -------- WhatsApp Helpers & Integration --------
+def generate_daily_attendance_report():
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    now_local = now_dt.astimezone(IST)
+    
+    start_of_today_ist = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today_ist = start_of_today_ist + datetime.timedelta(days=1)
+    
+    start_utc = start_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+    end_utc = end_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+    
+    try:
+        # Get all records for today, sorted by timestamp ascending
+        records = list(db.attendance.find({"timestamp": {"$gte": start_utc, "$lt": end_utc}}).sort("timestamp", 1))
+        employees = list(db.employees.find({}))
+    except Exception as e:
+        app.logger.error("DB Error in generate_daily_attendance_report: %s", e)
+        return "⚠️ Error generating daily attendance report from database."
+    
+    # Map employee_id -> list of records
+    present_map = {}
+    for r in records:
+        eid = r.get("employee_id")
+        if eid not in present_map:
+            present_map[eid] = []
+        present_map[eid].append(r)
+        
+    present_list = []
+    absent_list = []
+    
+    # Sort employees alphabetically by name
+    employees = sorted(employees, key=lambda x: x.get("name", "").lower())
+    
+    for emp in employees:
+        eid = emp.get("id")
+        name = emp.get("name")
+        if eid in present_map:
+            emp_records = present_map[eid]
+            check_ins = [r for r in emp_records if "Check In" in r.get("status", "Check In")]
+            check_outs = [r for r in emp_records if "Check Out" in r.get("status", "")]
+            
+            # First check-in or first record
+            first_record = check_ins[0] if check_ins else emp_records[0]
+            ts = parse_dt(first_record.get("timestamp"))
+            first_time_str = ts.astimezone(IST).strftime("%I:%M %p") if ts else "N/A"
+            status_str = first_record.get("status", "Check In")
+            
+            # Latest check-out
+            last_out_str = ""
+            if check_outs:
+                ts_out = parse_dt(check_outs[-1].get("timestamp"))
+                last_out_str = ts_out.astimezone(IST).strftime("%I:%M %p") if ts_out else ""
+                
+            detail = f"{name} (In: {first_time_str} - {status_str}"
+            if last_out_str:
+                detail += f", Out: {last_out_str}"
+            detail += ")"
+            present_list.append(detail)
+        else:
+            absent_list.append(name)
+            
+    date_str = now_local.strftime("%d-%m-%Y")
+    
+    msg_lines = [
+        "📊 *Raj Chemist - Daily Attendance Report* 📊",
+        f"📅 *Date:* {date_str}",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"✅ *Present ({len(present_list)}):*"
+    ]
+    if present_list:
+        for i, item in enumerate(present_list, 1):
+            msg_lines.append(f"{i}. {item}")
+    else:
+        msg_lines.append("No employees checked in today.")
+        
+    msg_lines.append(f"\n❌ *Absent ({len(absent_list)}):*")
+    if absent_list:
+        for i, name in enumerate(absent_list, 1):
+            msg_lines.append(f"• {name}")
+    else:
+        msg_lines.append("No employees absent today.")
+        
+    return "\n".join(msg_lines)
+
+
+def send_whatsapp_message(id_instance, api_token, chat_id, message_text, api_url=None):
+    if not id_instance or not api_token or not chat_id:
+        return False, "Missing credentials or Group ID."
+    
+    # Use custom api_url if provided, clean trailing slash, default to https://api.greenapi.com
+    base_url = (api_url or "https://api.greenapi.com").rstrip("/")
+    url = f"{base_url}/waInstance{id_instance}/sendMessage/{api_token}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "chatId": chat_id,
+        "message": message_text
+    }
+    
+    import urllib.request
+    import json
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_body = response.read().decode('utf-8')
+            res_data = json.loads(res_body)
+            if "idMessage" in res_data:
+                return True, "Message sent successfully!"
+            else:
+                return False, f"API Error: {res_body}"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
+
+
+def start_whatsapp_scheduler():
+    def run_scheduler_loop():
+        print("WhatsApp Daily Attendance Scheduler Thread started.")
+        import time
+        # Sleep for 15 seconds at startup to let MongoDB initialize
+        time.sleep(15)
+        while True:
+            try:
+                # Fetch settings from DB
+                _db = _get_real_db()
+                if _db is None:
+                    time.sleep(30)
+                    continue
+                
+                config = _db.settings.find_one({"_id": "whatsapp_config"})
+                if not config or not config.get("enabled"):
+                    time.sleep(60)
+                    continue
+                    
+                # Get current time in IST
+                IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+                now_local = datetime.datetime.now(datetime.timezone.utc).astimezone(IST)
+                
+                current_time_str = now_local.strftime("%H:%M") # HH:MM format
+                target_time_str = config.get("send_time", "21:00")
+                
+                # Check if time matches
+                if current_time_str == target_time_str:
+                    current_date_str = now_local.strftime("%Y-%m-%d")
+                    # Atomic check-and-set to prevent multiple worker processes from sending
+                    res = _db.settings.update_one(
+                        {"_id": "whatsapp_config", "last_sent_date": {"$ne": current_date_str}},
+                        {"$set": {"last_sent_date": current_date_str}}
+                    )
+                    
+                    if res.modified_count > 0:
+                        print(f"Triggering scheduled WhatsApp report for {current_date_str} at {current_time_str}")
+                        report = generate_daily_attendance_report()
+                        success, msg = send_whatsapp_message(
+                            config.get("id_instance"),
+                            config.get("api_token"),
+                            config.get("group_id"),
+                            report,
+                            config.get("api_url")
+                        )
+                        if success:
+                            print("Scheduled WhatsApp report sent successfully!")
+                        else:
+                            print(f"Scheduled WhatsApp report failed: {msg}")
+                            # Reset last_sent_date so we can retry if it failed
+                            _db.settings.update_one(
+                                {"_id": "whatsapp_config"},
+                                {"$set": {"last_sent_date": ""}}
+                            )
+                
+                time.sleep(45) # Sleep 45 seconds to avoid matching multiple times in the same minute
+            except Exception as ex:
+                print(f"Error in WhatsApp Scheduler loop: {ex}")
+                time.sleep(30)
+                
+    t = threading.Thread(target=run_scheduler_loop, daemon=True)
+    t.start()
+
+
+# Start WhatsApp daily scheduler if NOT on Vercel
+if not IS_VERCEL:
+    start_whatsapp_scheduler()
+
 
 # -------- System Settings --------
 @app.route("/settings", methods=["GET", "POST"])
 def settings_page():
     message = None
     if request.method == "POST":
-        wifi_enabled = request.form.get("wifi_restriction_enabled") == "on"
-        allowed_subnets = request.form.get("allowed_subnets", "").strip()
-        bypass_localhost = request.form.get("bypass_localhost") == "on"
-        
-        try:
-            db.settings.update_one(
-                {"_id": "network_config"},
-                {
-                    "$set": {
-                        "wifi_restriction_enabled": wifi_enabled,
-                        "allowed_subnets": allowed_subnets,
-                        "bypass_localhost": bypass_localhost
-                    }
-                },
-                upsert=True
-            )
-            message = "Settings updated successfully!"
-        except Exception as e:
-            app.logger.error("DB Error updating settings: %s", e)
-            message = "Error: Could not connect to database to save settings."
+        form_type = request.form.get("form_type", "network")
+        if form_type == "whatsapp":
+            whatsapp_enabled = request.form.get("whatsapp_enabled") == "on"
+            api_url = request.form.get("whatsapp_api_url", "https://api.greenapi.com").strip()
+            id_instance = request.form.get("whatsapp_id_instance", "").strip()
+            api_token = request.form.get("whatsapp_api_token", "").strip()
+            group_id = request.form.get("whatsapp_group_id", "").strip()
+            send_time = request.form.get("whatsapp_send_time", "21:00").strip()
+            
+            try:
+                db.settings.update_one(
+                    {"_id": "whatsapp_config"},
+                    {
+                        "$set": {
+                            "enabled": whatsapp_enabled,
+                            "api_url": api_url,
+                            "id_instance": id_instance,
+                            "api_token": api_token,
+                            "group_id": group_id,
+                            "send_time": send_time
+                        }
+                    },
+                    upsert=True
+                )
+                message = "WhatsApp integration settings updated successfully!"
+            except Exception as e:
+                app.logger.error("DB Error updating WhatsApp settings: %s", e)
+                message = "Error: Could not save WhatsApp settings."
+        else:
+            wifi_enabled = request.form.get("wifi_restriction_enabled") == "on"
+            allowed_subnets = request.form.get("allowed_subnets", "").strip()
+            bypass_localhost = request.form.get("bypass_localhost") == "on"
+            
+            try:
+                db.settings.update_one(
+                    {"_id": "network_config"},
+                    {
+                        "$set": {
+                            "wifi_restriction_enabled": wifi_enabled,
+                            "allowed_subnets": allowed_subnets,
+                            "bypass_localhost": bypass_localhost
+                        }
+                    },
+                    upsert=True
+                )
+                message = "Settings updated successfully!"
+            except Exception as e:
+                app.logger.error("DB Error updating settings: %s", e)
+                message = "Error: Could not connect to database to save settings."
         
     config = get_network_config()
+    whatsapp_config = get_whatsapp_config()
+    
     client_ip = request.remote_addr
     if request.headers.getlist("X-Forwarded-For"):
         client_ip = request.headers.getlist("X-Forwarded-For")[0]
@@ -1374,13 +1636,77 @@ def settings_page():
     if client_ip and client_ip.startswith("::ffff:"):
         client_ip = client_ip[7:]
         
-    return render_template("settings.html", config=config, message=message, current_ip=client_ip)
+    return render_template("settings.html", config=config, whatsapp_config=whatsapp_config, message=message, current_ip=client_ip)
+
+
+@app.route("/api/test-whatsapp", methods=["POST"])
+def test_whatsapp():
+    if not session.get("admin_logged_in"):
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+        
+    api_url = request.form.get("api_url", "https://api.greenapi.com").strip()
+    id_instance = request.form.get("id_instance", "").strip()
+    api_token = request.form.get("api_token", "").strip()
+    group_id = request.form.get("group_id", "").strip()
+    
+    if not id_instance or not api_token or not group_id:
+        return jsonify({"success": False, "error": "All fields (API URL, Instance ID, Token, Group ID) are required."}), 400
+        
+    test_msg = "🧪 *Raj Chemist - WhatsApp Integration Test* 🧪\n\nYour integration is working correctly! Daily attendance reports will be sent to this group."
+    success, msg = send_whatsapp_message(id_instance, api_token, group_id, test_msg, api_url)
+    
+    if success:
+        return jsonify({"success": True, "message": "Test message sent successfully to your WhatsApp group!"})
+    else:
+        return jsonify({"success": False, "error": msg})
+
+
+@app.route("/api/send-daily-attendance", methods=["POST", "GET"])
+def manual_send_attendance():
+    api_key = request.args.get("key") or request.headers.get("X-API-Key")
+    config = get_whatsapp_config()
+    
+    is_admin = session.get("admin_logged_in") == True
+    is_cron = False
+    if api_key and config.get("api_token") and api_key == config.get("api_token"):
+        is_cron = True
+        
+    if not is_admin and not is_cron:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+        
+    if not config.get("enabled"):
+        return jsonify({"success": False, "error": "WhatsApp Integration is currently disabled in settings."}), 400
+        
+    id_instance = config.get("id_instance")
+    api_token = config.get("api_token")
+    group_id = config.get("group_id")
+    api_url = config.get("api_url")
+    
+    if not id_instance or not api_token or not group_id:
+        return jsonify({"success": False, "error": "WhatsApp credentials or Group ID not configured."}), 400
+        
+    report = generate_daily_attendance_report()
+    success, msg = send_whatsapp_message(id_instance, api_token, group_id, report, api_url)
+    
+    if success:
+        # Update last sent date to today so it doesn't trigger automatically again today
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        today_str = datetime.datetime.now(datetime.timezone.utc).astimezone(IST).strftime("%Y-%m-%d")
+        db.settings.update_one(
+            {"_id": "whatsapp_config"},
+            {"$set": {"last_sent_date": today_str}}
+        )
+        return jsonify({"success": True, "message": "Daily attendance report sent successfully!"})
+    else:
+        return jsonify({"success": False, "error": msg})
+
 
 if __name__ == "__main__":
     # Warmup ping to Mongo
     try:
-        client.admin.command('ping')
-        print("Connected successfully to MongoDB")
+        db_obj = _get_real_db()
+        if db_obj is not None:
+            print("Connected successfully to MongoDB")
     except Exception as e:
         print(f"COULD NOT CONNECT TO MONGODB: {e}")
     
