@@ -1065,10 +1065,16 @@ def employees_list():
 # Fast endpoint: returns only the latest employee id (for sidebar init)
 @app.route("/api/first_employee")
 def api_first_employee():
-    emp = db.employees.find_one({}, {"id": 1}, sort=[("id", -1)])
-    if emp:
-        return jsonify({"eid": emp["id"]})
-    return jsonify({"eid": None}), 404
+    try:
+        cursor = db.employees.find({}, {"id": 1}).sort("id", -1).limit(1)
+        employees = list(cursor)
+        if employees and "id" in employees[0]:
+            return jsonify({"eid": employees[0]["id"]})
+        app.logger.warning("api_first_employee: No employees found in database.")
+        return jsonify({"eid": None}), 404
+    except Exception as e:
+        app.logger.error("Error in api_first_employee: %s", e)
+        return jsonify({"eid": None, "error": str(e)}), 500
 
 
 @app.route("/employees/<int:eid>", methods=["DELETE"])
@@ -1327,62 +1333,63 @@ def employee_image(eid):
 
 @app.route("/api/sidebar_employee/<direction>/<int:current_eid>")
 def api_sidebar_employee(direction, current_eid):
-    employees = list(db.employees.find({}, {"id": 1}).sort("id", 1))
-    if not employees:
-        return jsonify({"error": "No employees"}), 404
-        
-    eids = [e["id"] for e in employees]
     try:
-        idx = eids.index(current_eid)
-    except ValueError:
-        idx = 0
+        employees = list(db.employees.find({}, {"id": 1}).sort("id", 1))
+        if not employees:
+            return jsonify({"error": "No employees"}), 404
+            
+        eids = [e["id"] for e in employees]
+        try:
+            idx = eids.index(current_eid)
+        except ValueError:
+            idx = 0
+            
+        if direction == "next":
+            idx = (idx + 1) % len(eids)
+        elif direction == "prev":
+            idx = (idx - 1) % len(eids)
+        # 'current' stays at same idx - just refreshes stats for current employee
+            
+        target_eid = eids[idx]
         
-    if direction == "next":
-        idx = (idx + 1) % len(eids)
-    elif direction == "prev":
-        idx = (idx - 1) % len(eids)
-    # 'current' stays at same idx - just refreshes stats for current employee
+        emp = db.employees.find_one({"id": target_eid})
+        if not emp:
+            return jsonify({"error": "Employee not found"}), 404
+    
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        month_str = datetime.datetime.now(IST).strftime("%Y-%m")
+        query = {"employee_id": target_eid, "timestamp": get_month_range_query(month_str)}
+        # Only fetch fields we need - faster
+        records = list(db.attendance.find(query, {"status": 1, "timestamp": 1, "_id": 0}).sort("timestamp", 1))
         
-    target_eid = eids[idx]
-    
-    emp = db.employees.find_one({"id": target_eid})
-    if not emp:
-        return jsonify({"error": "Employee not found"}), 404
-
-    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-    month_str = datetime.datetime.now(IST).strftime("%Y-%m")
-    query = {"employee_id": target_eid, "timestamp": get_month_range_query(month_str)}
-    # Only fetch fields we need - faster
-    records = list(db.attendance.find(query, {"status": 1, "timestamp": 1, "_id": 0}).sort("timestamp", 1))
-    
-    total_seconds = 0
-    last_checkin_time = None
-    for r in records:
-        status = r.get("status", "")
-        ts = parse_dt(r["timestamp"])
-        if ts:
-            if status in ["Check In", "Late Check In"]:
-                last_checkin_time = ts
-            elif status in ["Check Out", "Early Out"]:
-                if last_checkin_time:
-                    if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
-                        total_seconds += (ts - last_checkin_time).total_seconds()
-                        last_checkin_time = None
-                
-    total_hours = total_seconds / 3600.0
-    rate = emp.get("hourly_rate", 0.0)
-    salary = total_hours * rate
-    
-    resp = jsonify({
-        "name": emp.get("name", "Unknown"),
-        "role": emp.get("designation", "Employee") or "Employee",
-        "dept": emp.get("department", "N/A") or "N/A",
-        "total_hours": f"{total_hours:.2f}",
-        "regular_hours": f"{total_hours:.2f} hrs",
-        "rate": f"₹{rate:.2f}",
-        "salary": f"₹{salary:.2f}",
-        "eid": target_eid
-    })
+        total_seconds = 0
+        last_checkin_time = None
+        for r in records:
+            status = r.get("status", "")
+            ts = parse_dt(r["timestamp"])
+            if ts:
+                if status in ["Check In", "Late Check In"]:
+                    last_checkin_time = ts
+                elif status in ["Check Out", "Early Out"]:
+                    if last_checkin_time:
+                        if last_checkin_time.astimezone(IST).date() == ts.astimezone(IST).date():
+                            total_seconds += (ts - last_checkin_time).total_seconds()
+                            last_checkin_time = None
+                    
+        total_hours = total_seconds / 3600.0
+        rate = emp.get("hourly_rate", 0.0)
+        salary = total_hours * rate
+        
+        resp = jsonify({
+            "name": emp.get("name", "Unknown"),
+            "role": emp.get("designation", "Employee") or "Employee",
+            "dept": emp.get("department", "N/A") or "N/A",
+            "total_hours": f"{total_hours:.2f}",
+            "regular_hours": f"{total_hours:.2f} hrs",
+            "rate": f"₹{rate:.2f}",
+            "salary": f"₹{salary:.2f}",
+            "eid": target_eid
+        })
 # -------- WhatsApp Helpers & Integration --------
 def generate_daily_attendance_report():
     IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
