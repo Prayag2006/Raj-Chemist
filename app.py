@@ -1510,6 +1510,146 @@ def send_whatsapp_message(id_instance, api_token, chat_id, message_text, api_url
         return False, f"Connection error: {str(e)}"
 
 
+def generate_daily_attendance_csv():
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    now_local = now_dt.astimezone(IST)
+    
+    start_of_today_ist = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_today_ist = start_of_today_ist + datetime.timedelta(days=1)
+    
+    start_utc = start_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+    end_utc = end_of_today_ist.astimezone(datetime.timezone.utc).isoformat()
+    
+    import io
+    import csv
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # CSV Header matching requested details
+    writer.writerow(["Employee ID", "Name", "Department", "Designation", "Shift", "Status", "Check-in Time", "Check-out Time", "Duration (hrs)"])
+    
+    try:
+        # Get all records for today, sorted by timestamp ascending
+        records = list(db.attendance.find({"timestamp": {"$gte": start_utc, "$lt": end_utc}}).sort("timestamp", 1))
+        employees = list(db.employees.find({}))
+    except Exception as e:
+        app.logger.error("DB Error in generate_daily_attendance_csv: %s", e)
+        writer.writerow(["Error fetching records from database"])
+        return output.getvalue().encode('utf-8')
+    
+    # Map employee_id -> list of records
+    present_map = {}
+    for r in records:
+        eid = r.get("employee_id")
+        if eid not in present_map:
+            present_map[eid] = []
+        present_map[eid].append(r)
+        
+    # Sort employees alphabetically
+    employees = sorted(employees, key=lambda x: x.get("name", "").lower())
+    
+    for emp in employees:
+        eid = emp.get("id")
+        name = emp.get("name")
+        dept = emp.get("department", "N/A") or "N/A"
+        desig = emp.get("designation", "Employee") or "Employee"
+        shift_start = emp.get("shift_start", "09:00")
+        shift_end = emp.get("shift_end", "18:00")
+        shift_str = f"{shift_start} - {shift_end}"
+        
+        if eid in present_map:
+            emp_records = present_map[eid]
+            check_ins = [r for r in emp_records if "Check In" in r.get("status", "Check In")]
+            check_outs = [r for r in emp_records if "Check Out" in r.get("status", "")]
+            
+            # Check-in details
+            first_record = check_ins[0] if check_ins else emp_records[0]
+            ts_in = parse_dt(first_record.get("timestamp"))
+            in_time_str = ts_in.astimezone(IST).strftime("%I:%M:%S %p") if ts_in else "N/A"
+            status_str = first_record.get("status", "Check In")
+            
+            # Check-out details
+            out_time_str = "-"
+            total_hours_str = "-"
+            if check_outs:
+                last_record = check_outs[-1]
+                ts_out = parse_dt(last_record.get("timestamp"))
+                out_time_str = ts_out.astimezone(IST).strftime("%I:%M:%S %p") if ts_out else "N/A"
+                
+                # Calculate duration if check-in matches check-out date
+                if ts_in and ts_out and ts_in.astimezone(IST).date() == ts_out.astimezone(IST).date():
+                    duration = (ts_out - ts_in).total_seconds() / 3600.0
+                    total_hours_str = f"{duration:.2f}"
+            
+            writer.writerow([emp.get("emp_id", f"#{eid}"), name, dept, desig, shift_str, status_str, in_time_str, out_time_str, total_hours_str])
+        else:
+            # Absent
+            writer.writerow([emp.get("emp_id", f"#{eid}"), name, dept, desig, shift_str, "Absent", "-", "-", "-"])
+            
+    return output.getvalue().encode('utf-8-sig')
+
+
+def send_whatsapp_file(id_instance, api_token, chat_id, file_bytes, file_name, caption, api_url=None):
+    if not id_instance or not api_token or not chat_id:
+        return False, "Missing credentials or Group ID."
+        
+    base_url = (api_url or "https://api.greenapi.com").rstrip("/")
+    url = f"{base_url}/waInstance{id_instance}/sendFileByUpload/{api_token}"
+    
+    boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+    
+    # Construct body parts for multipart/form-data
+    parts = []
+    # Add chatId
+    parts.append(f'--{boundary}')
+    parts.append('Content-Disposition: form-data; name="chatId"')
+    parts.append('')
+    parts.append(chat_id)
+    
+    # Add caption
+    parts.append(f'--{boundary}')
+    parts.append('Content-Disposition: form-data; name="caption"')
+    parts.append('')
+    parts.append(caption)
+    
+    # Add fileName
+    parts.append(f'--{boundary}')
+    parts.append('Content-Disposition: form-data; name="fileName"')
+    parts.append('')
+    parts.append(file_name)
+    
+    # Add file part header
+    parts.append(f'--{boundary}')
+    parts.append(f'Content-Disposition: form-data; name="file"; filename="{file_name}"')
+    parts.append('Content-Type: text/csv')
+    parts.append('')
+    parts.append('')
+    
+    body_header = '\r\n'.join(parts).encode('utf-8')
+    body_footer = f'\r\n--{boundary}--\r\n'.encode('utf-8')
+    
+    body = body_header + file_bytes + body_footer
+    
+    import urllib.request
+    import json
+    req = urllib.request.Request(url, data=body, method='POST')
+    req.add_header('Content-Type', f'multipart/form-data; boundary={boundary}')
+    req.add_header('Content-Length', str(len(body)))
+    
+    try:
+        with urllib.request.urlopen(req, timeout=25) as response:
+            res_body = response.read().decode('utf-8')
+            res_data = json.loads(res_body)
+            if "idMessage" in res_data:
+                return True, "Report file sent successfully!"
+            else:
+                return False, f"API Error: {res_body}"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
+
+
 def start_whatsapp_scheduler():
     def run_scheduler_loop():
         print("WhatsApp Daily Attendance Scheduler Thread started.")
@@ -1548,10 +1688,15 @@ def start_whatsapp_scheduler():
                     if res.modified_count > 0:
                         print(f"Triggering scheduled WhatsApp report for {current_date_str} at {current_time_str}")
                         report = generate_daily_attendance_report()
-                        success, msg = send_whatsapp_message(
+                        csv_bytes = generate_daily_attendance_csv()
+                        file_name = f"Attendance_Report_{current_date_str}.csv"
+                        
+                        success, msg = send_whatsapp_file(
                             config.get("id_instance"),
                             config.get("api_token"),
                             config.get("group_id"),
+                            csv_bytes,
+                            file_name,
                             report,
                             config.get("api_url")
                         )
@@ -1698,7 +1843,12 @@ def manual_send_attendance():
         return jsonify({"success": False, "error": "WhatsApp credentials or Group ID not configured."}), 400
         
     report = generate_daily_attendance_report()
-    success, msg = send_whatsapp_message(id_instance, api_token, group_id, report, api_url)
+    csv_bytes = generate_daily_attendance_csv()
+    IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+    today_str = datetime.datetime.now(datetime.timezone.utc).astimezone(IST).strftime("%d-%m-%Y")
+    file_name = f"Attendance_Report_{today_str}.csv"
+    
+    success, msg = send_whatsapp_file(id_instance, api_token, group_id, csv_bytes, file_name, report, api_url)
     
     if success:
         # Update last sent date to today so it doesn't trigger automatically again today
