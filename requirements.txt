@@ -1,9 +1,8 @@
-Flask
-pymongo[srv]
-dnspython
-certifi
-numpy
-opencv-python-headless
-scikit-learn
-pandas
-gunicorn
+Flask==3.0.3
+pymongo[srv]==4.7.3
+dnspython==2.6.1
+certifi==2024.7.4
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+scikit-learn==1.5.1
+gunicorn==22.0.0

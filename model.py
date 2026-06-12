@@ -5,10 +5,31 @@ import pickle
 import datetime
 from sklearn.ensemble import RandomForestClassifier
 
-MODEL_PATH = "model.pkl"
+import os as _os
+# Vercel has a read-only filesystem - use /tmp for writable files
+if _os.environ.get("VERCEL"):
+    MODEL_PATH = "/tmp/model.pkl"
+else:
+    MODEL_PATH = "model.pkl"
 
-# Initialize OpenCV Haar Cascade for face detection
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+# Initialize OpenCV Haar Cascades for face detection (frontal and profile/side-view fallbacks)
+face_cascade_default = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+face_cascade_alt = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
+face_cascade_profile = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
+
+def detect_faces_robust(gray, min_size_val):
+    # 1. Try frontal default - optimized scaleFactor (1.3) and minNeighbors (4) for instant response
+    faces = face_cascade_default.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
+    if len(faces) > 0:
+        return faces
+    # 2. Try frontal alt - optimized fallback for tilted heads
+    faces = face_cascade_alt.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
+    if len(faces) > 0:
+        return faces
+    # 3. Try profile side-view fallback for side profiles
+    faces = face_cascade_profile.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
+    return faces
+
 
 # ---- Utility: extract face crop -> robust LBP spatial histogram vector ----
 def crop_face_and_embed(bgr_image, bbox):
@@ -77,7 +98,7 @@ def extract_embedding_for_image(stream_or_bytes):
         
     gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
     min_size_val = int(30 * scale)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
+    faces = detect_faces_robust(gray, min_size_val)
     if len(faces) == 0:
         return None
     
@@ -91,28 +112,47 @@ def extract_embedding_for_image(stream_or_bytes):
 
 # ---- Load model helpers ----
 _cached_clf = None
+_cached_model_updated_at = None
+_last_db_check_time = 0.0
 
 def load_model_if_exists(db=None):
-    global _cached_clf
-    if _cached_clf is not None:
+    global _cached_clf, _cached_model_updated_at, _last_db_check_time
+    import time
+    
+    # If DB is not available, check local cache or file
+    if db is None:
+        if _cached_clf is not None:
+            return _cached_clf
+        if os.path.exists(MODEL_PATH):
+            try:
+                with open(MODEL_PATH, "rb") as f:
+                    _cached_clf = pickle.load(f)
+                return _cached_clf
+            except Exception:
+                pass
+        return None
+        
+    current_time = time.time()
+    if _cached_clf is not None and (current_time - _last_db_check_time < 10.0):
         return _cached_clf
         
-    # Try loading from local file
-    if os.path.exists(MODEL_PATH):
-        try:
-            with open(MODEL_PATH, "rb") as f:
-                _cached_clf = pickle.load(f)
-            return _cached_clf
-        except Exception:
-            pass
+    try:
+        _last_db_check_time = current_time
+        # Check database for latest_model metadata first (to check updated_at)
+        model_meta = db.models.find_one({"_id": "latest_model"}, {"updated_at": 1})
+        if model_meta:
+            db_updated_at = model_meta.get("updated_at")
+            # If we already have the latest version cached, return it directly
+            if _cached_clf is not None and db_updated_at == _cached_model_updated_at:
+                return _cached_clf
             
-    # Try loading from MongoDB
-    if db is not None:
-        try:
+            # Fetch the actual bytes and load the model
             model_doc = db.models.find_one({"_id": "latest_model"})
             if model_doc and "model_bytes" in model_doc:
                 clf = pickle.loads(model_doc["model_bytes"])
                 _cached_clf = clf
+                _cached_model_updated_at = db_updated_at
+                
                 # Also save to local disk for faster subsequent loads
                 try:
                     with open(MODEL_PATH, "wb") as f:
@@ -120,150 +160,179 @@ def load_model_if_exists(db=None):
                 except Exception:
                     pass
                 return _cached_clf
-        except Exception:
-            pass
+        else:
+            # No model in DB, check local file
+            if _cached_clf is not None:
+                return _cached_clf
+            if os.path.exists(MODEL_PATH):
+                try:
+                    with open(MODEL_PATH, "rb") as f:
+                        _cached_clf = pickle.load(f)
+                    return _cached_clf
+                except Exception:
+                    pass
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Error checking/loading model from DB: {e}")
+        if _cached_clf is not None:
+            return _cached_clf
+        if os.path.exists(MODEL_PATH):
+            try:
+                with open(MODEL_PATH, "rb") as f:
+                    _cached_clf = pickle.load(f)
+                return _cached_clf
+            except Exception:
+                pass
             
     return None
 
 def predict_with_model(clf, emb):
-    # returns label and confidence (max probability or cosine similarity)
-    proba = clf.predict_proba([emb])[0]
-    idx = np.argmax(proba)
-    label = clf.classes_[idx]
-    
-    # If centroids are attached, compute Cosine Similarity to the class centroid as confidence
-    if hasattr(clf, 'centroids_') and label in clf.centroids_:
-        centroid = clf.centroids_[label]
-        dot = np.dot(emb, centroid)
-        norm_a = np.linalg.norm(emb)
-        norm_b = np.linalg.norm(centroid)
-        if norm_a > 0 and norm_b > 0:
-            conf = float(dot / (norm_a * norm_b))
-        else:
-            conf = 0.0
-    else:
-        # Fallback to Random Forest vote probability if legacy model
-        conf = float(proba[idx])
+    # Use Random Forest first to predict the identity robustly
+    if hasattr(clf, 'predict_proba'):
+        proba = clf.predict_proba([emb])[0]
+        idx = np.argmax(proba)
+        rf_label = clf.classes_[idx]
+        rf_conf = proba[idx]
         
-    return label, conf
+        # Calculate Cosine Similarity to the predicted class centroid
+        if hasattr(clf, 'centroids_') and clf.centroids_ and rf_label in clf.centroids_:
+            centroid = clf.centroids_[rf_label]
+            dot = np.dot(emb, centroid)
+            norm_a = np.linalg.norm(emb)
+            norm_b = np.linalg.norm(centroid)
+            cossim = float(dot / (norm_a * norm_b)) if (norm_a > 0 and norm_b > 0) else 0.0
+            
+            # If Random Forest is confident, return the identity and the cosine similarity
+            if rf_conf >= 0.80:
+                return rf_label, cossim
+            else:
+                # If RF is not confident, return similarity 0.0 to reject it
+                return rf_label, 0.0
+                
+    # Fallback to pure Centroid similarity if predict_proba is not available
+    if hasattr(clf, 'centroids_') and clf.centroids_:
+        best_label = None
+        best_conf = -1.0
+        for label, centroid in clf.centroids_.items():
+            dot = np.dot(emb, centroid)
+            norm_a = np.linalg.norm(emb)
+            norm_b = np.linalg.norm(centroid)
+            sim = float(dot / (norm_a * norm_b)) if (norm_a > 0 and norm_b > 0) else 0.0
+            if sim > best_conf:
+                best_conf = sim
+                best_label = label
+        return best_label, best_conf
+        
+    return None, 0.0
 
 # ---- Training function used in background ----
 def train_model_background(dataset_dir, db=None, progress_callback=None):
-    """
-    dataset_dir/
-        employee_id/
-            img1.jpg
-            img2.jpg
-    """
     global _cached_clf
 
     try:
-        # 1. Restore dataset files from MongoDB if available (optimized batch-restore)
-        if db is not None:
-            if progress_callback:
-                progress_callback(5, "Checking database for missing dataset files...")
-            try:
-                # Gather all existing local files to prevent duplicate downloads
-                existing_files = set()
-                if os.path.exists(dataset_dir):
-                    for root, dirs, files in os.walk(dataset_dir):
-                        for f in files:
-                            if f.lower().endswith((".jpg", ".jpeg", ".png")):
-                                rel_dir = os.path.basename(root)
-                                existing_files.add((rel_dir, f))
-                
-                # Fetch only metadata (no heavy binary image data) to check what is in the DB
-                metadata_cursor = db.face_images.find({}, {"employee_id": 1, "filename": 1})
-                missing_queries = []
-                
-                for doc in metadata_cursor:
-                    eid = doc.get("employee_id")
-                    fname = doc.get("filename")
-                    if not eid or not fname:
-                        continue
-                    if (str(eid), fname) not in existing_files:
-                        missing_queries.append({"employee_id": int(eid), "filename": fname})
-                
-                restored_count = 0
-                if len(missing_queries) > 0:
-                    if progress_callback:
-                        progress_callback(8, f"Downloading {len(missing_queries)} missing images...")
-                    
-                    # Fetch missing documents with their binary image data in chunks of 100
-                    chunk_size = 100
-                    for i in range(0, len(missing_queries), chunk_size):
-                        chunk = missing_queries[i : i + chunk_size]
-                        data_cursor = db.face_images.find({"$or": chunk})
-                        for doc in data_cursor:
-                            eid = doc.get("employee_id")
-                            fname = doc.get("filename")
-                            img_data = doc.get("image_data")
-                            if not eid or not fname or not img_data:
-                                continue
-                            
-                            emp_folder = os.path.join(dataset_dir, str(eid))
-                            os.makedirs(emp_folder, exist_ok=True)
-                            
-                            file_path = os.path.join(emp_folder, fname)
-                            with open(file_path, "wb") as f:
-                                f.write(img_data)
-                            restored_count += 1
-                
-                if progress_callback:
-                    if restored_count > 0:
-                        progress_callback(10, f"Restored {restored_count} new images. Database synced.")
-                    else:
-                        progress_callback(10, "All images already cached locally. Database sync skipped.")
-            except Exception as e:
-                if progress_callback:
-                    progress_callback(10, f"Sync warning: {str(e)}")
-
         X = []
         y = []
-        
-        # Filter: only look at numeric directories to prevent ValueError: int(eid) on __pycache__ or other folders
-        employee_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d)) and d.isdigit()]
-        total_employees = max(1, len(employee_dirs))
-        processed = 0
 
-        for eid in employee_dirs:
-            folder = os.path.join(dataset_dir, eid)
-            files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg",".jpeg",".png"))]
-            for fn in files:
-                path = os.path.join(folder, fn)
-                img = cv2.imread(path)
-                if img is None:
-                    continue
-                
-                # Speed up face detection by downscaling the detection image
-                h, w = img.shape[:2]
-                scale = 1.0
-                if w > 240:
-                    scale = 240.0 / w
-                    detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
-                else:
-                    detect_img = img
-                    
-                gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
-                min_size_val = int(30 * scale)
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(min_size_val, min_size_val))
-                if len(faces) == 0:
-                    continue
-                
-                # Map the largest face coordinates back to original scale
-                largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-                (x, fy, fw, fh) = largest_face
-                bbox = (int(x / scale), int(fy / scale), int(fw / scale), int(fh / scale))
-                
-                emb = crop_face_and_embed(img, bbox)
-                if emb is None:
-                    continue
-                X.append(emb)
-                y.append(int(eid))
-            processed += 1
+        if db is not None:
             if progress_callback:
-                pct = int((processed/total_employees)*80)
-                progress_callback(pct, f"Processed {processed}/{total_employees} employees")
+                progress_callback(5, "Fetching face embeddings from database...")
+            
+            # Fetch all face images metadata and embeddings from MongoDB
+            cursor = db.face_images.find({}, {"employee_id": 1, "filename": 1, "embedding": 1})
+            docs = list(cursor)
+            
+            total_docs = len(docs)
+            processed_docs = 0
+            
+            for doc in docs:
+                eid = doc.get("employee_id")
+                emb_list = doc.get("embedding")
+                
+                if not eid:
+                    continue
+                
+                if emb_list is not None:
+                    # Pre-computed embedding exists! Use it directly.
+                    X.append(np.array(emb_list, dtype=np.float32))
+                    y.append(int(eid))
+                else:
+                    # Pre-computed embedding is missing. Fetch full document with image_data
+                    full_doc = db.face_images.find_one({"_id": doc["_id"]}, {"image_data": 1, "filename": 1})
+                    if full_doc and full_doc.get("image_data"):
+                        import io
+                        # Extract embedding from image bytes
+                        img_bytes = full_doc["image_data"]
+                        emb = extract_embedding_for_image(io.BytesIO(img_bytes))
+                        if emb is not None:
+                            # Save back to MongoDB so we don't have to compute it next time
+                            try:
+                                db.face_images.update_one(
+                                    {"_id": doc["_id"]},
+                                    {"$set": {"embedding": emb.tolist()}}
+                                )
+                            except Exception:
+                                pass
+                            X.append(emb)
+                            y.append(int(eid))
+                
+                processed_docs += 1
+                if progress_callback and total_docs > 0:
+                    pct = int((processed_docs / total_docs) * 80)
+                    progress_callback(pct, f"Processed {processed_docs}/{total_docs} face embeddings")
+        
+        else:
+            # Fallback for offline/local mode when db is not provided
+            if progress_callback:
+                progress_callback(5, "Scanning local dataset directory...")
+            
+            if not os.path.exists(dataset_dir):
+                if progress_callback:
+                    progress_callback(0, "No local training data found")
+                return
+
+            employee_dirs = [d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d)) and d.isdigit()]
+            total_employees = max(1, len(employee_dirs))
+            processed = 0
+
+            for eid in employee_dirs:
+                folder = os.path.join(dataset_dir, eid)
+                files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg",".jpeg",".png"))]
+                for fn in files:
+                    path = os.path.join(folder, fn)
+                    img = cv2.imread(path)
+                    if img is None:
+                        continue
+                    
+                    # Speed up face detection by downscaling the detection image
+                    h, w = img.shape[:2]
+                    scale = 1.0
+                    if w > 240:
+                        scale = 240.0 / w
+                        detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
+                    else:
+                        detect_img = img
+                        
+                    gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
+                    min_size_val = int(30 * scale)
+                    faces = detect_faces_robust(gray, min_size_val)
+                    if len(faces) == 0:
+                        continue
+                    
+                    # Map the largest face coordinates back to original scale
+                    largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
+                    (x, fy, fw, fh) = largest_face
+                    bbox = (int(x / scale), int(fy / scale), int(fw / scale), int(fh / scale))
+                    
+                    emb = crop_face_and_embed(img, bbox)
+                    if emb is None:
+                        continue
+                    X.append(emb)
+                    y.append(int(eid))
+                processed += 1
+                if progress_callback:
+                    pct = int((processed/total_employees)*80)
+                    progress_callback(pct, f"Processed {processed}/{total_employees} employees")
 
         if len(X) == 0:
             if progress_callback:

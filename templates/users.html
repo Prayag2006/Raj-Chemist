@@ -20,7 +20,7 @@
                 <th>Employee ID</th>
                 <th>Dept / Role</th>
                 <th>Shift Time</th>
-                <th>Rate ($/hr)</th>
+                <th>Rate (₹/hr)</th>
                 <th>Enrolled</th>
                 <th class="text-end">Actions</th>
             </tr>
@@ -42,7 +42,7 @@
                     <small class="text-muted">{{ emp.designation }}</small>
                 </td>
                 <td class="text-muted">{{ emp.shift_start|default('09:00') }}</td>
-                <td class="text-muted">${{ "%.2f"|format(emp.hourly_rate if emp.hourly_rate else 0) }}</td>
+                <td class="text-muted">₹{{ "%.2f"|format(emp.hourly_rate if emp.hourly_rate else 0) }}</td>
                 <td class="small text-muted">
                     {{ emp.created_at[:10] if emp.created_at else 'N/A' }}
                 </td>
@@ -97,7 +97,7 @@
                     <input type="time" class="form-control" id="edit_shift_start" name="shift_start">
                 </div>
                 <div class="col-6">
-                    <label class="small fw-bold text-muted mb-1">Hourly Rate ($)</label>
+                    <label class="small fw-bold text-muted mb-1">Hourly Rate (₹)</label>
                     <input type="number" step="0.01" class="form-control" id="edit_hourly_rate" name="hourly_rate">
                 </div>
             </div>

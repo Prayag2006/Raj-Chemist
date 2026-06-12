@@ -22,7 +22,12 @@ document.addEventListener("DOMContentLoaded", () => {
     trainBtn.disabled = true;
     const start = await fetch("/train_model");
     if (!start.ok && start.status !== 202) {
-      alert("Failed to start training");
+      try {
+        const errData = await start.json();
+        alert(errData.message || "Failed to start training");
+      } catch (e) {
+        alert("Failed to start training");
+      }
       trainBtn.disabled = false;
       return;
     }

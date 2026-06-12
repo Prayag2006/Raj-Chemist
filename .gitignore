@@ -19,3 +19,18 @@ env/
 
 # Scratch
 scratch/
+
+# Local trained model (stored in MongoDB, not needed in git)
+model.pkl
+
+# Local train status (managed at runtime)
+train_status.json
+
+# Local dataset images (backed up to MongoDB)
+dataset/
+
+# Debug/utility scripts
+debug_mongo_docs.py
+cleanup_unknown.py
+
+.vercel

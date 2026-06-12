@@ -61,8 +61,8 @@ async function captureLoop() {
   if (!markStream || !markInterval) return;
   await captureAndRecognize();
   if (markStream && markInterval) {
-    // Wait 500ms before triggering the next capture to avoid request pileup
-    markInterval = setTimeout(captureLoop, 500);
+    // Wait 200ms before triggering the next capture to achieve real-time speed
+    markInterval = setTimeout(captureLoop, 200);
   }
 }
 

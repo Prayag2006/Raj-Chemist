@@ -41,9 +41,9 @@
                     </div>
                 </td>
                 <td class="text-muted">#{{ row.emp_id }}</td>
-                <td class="text-end text-muted">${{ "%.2f"|format(row.hourly_rate) }}/hr</td>
+                <td class="text-end text-muted">₹{{ "%.2f"|format(row.hourly_rate) }}/hr</td>
                 <td class="text-end fw-bold">{{ "%.2f"|format(row.total_hours) }} hrs</td>
-                <td class="text-end text-success fw-bold">${{ "%.2f"|format(row.salary) }}</td>
+                <td class="text-end text-success fw-bold">₹{{ "%.2f"|format(row.salary) }}</td>
             </tr>
             {% else %}
             <tr>

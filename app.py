@@ -55,7 +55,12 @@ def get_month_range_query(month_str):
 
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DATASET_DIR = os.path.join(APP_DIR, "dataset")
+# Vercel has a read-only filesystem except /tmp
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+if IS_VERCEL:
+    DATASET_DIR = "/tmp/dataset"
+else:
+    DATASET_DIR = os.path.join(APP_DIR, "dataset")
 try:
     os.makedirs(DATASET_DIR, exist_ok=True)
 except Exception:
@@ -68,41 +73,70 @@ else:
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# ---------- MongoDB Setup ----------
-# Reads from Environment Variable for Cloud hosting (like Atlas), or defaults to local.
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
-# Added short timeouts so serverless execution doesn't hang indefinitely if DB is down
-if "localhost" in MONGO_URI:
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
-else:
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, tlsCAFile=certifi.where())
-db = client['attendance_system'] # Database Name
+# ---------- MongoDB Setup (Crash-safe for Vercel) ----------
+# Reads MONGO_URI from environment - REQUIRED on Vercel, defaults to local for dev.
+MONGO_URI = os.environ.get("MONGO_URI", "")
 
-# Create database indexes for maximum query performance
-try:
-    db.employees.create_index("id", unique=True)
-except Exception as e:
-    print(f"Employees id index warning: {e}")
+_mongo_client = None
+_mongo_db = None
 
-try:
-    db.attendance.create_index([("employee_id", 1), ("timestamp", 1)])
-except Exception as e:
-    print(f"Attendance compound index warning: {e}")
+def _get_real_db():
+    """Get (or lazily create) the real MongoDB database object."""
+    global _mongo_client, _mongo_db
+    if _mongo_db is not None:
+        return _mongo_db
+    uri = MONGO_URI or "mongodb://localhost:27017/"
+    try:
+        if "localhost" in uri or "127.0.0.1" in uri:
+            _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000)
+        else:
+            _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000, tlsCAFile=certifi.where())
+        _mongo_db = _mongo_client['attendance_system']
+        # Create indexes (silently ignore failures)
+        for idx_fn in [
+            lambda: _mongo_db.employees.create_index("id", unique=True),
+            lambda: _mongo_db.attendance.create_index([("employee_id", 1), ("timestamp", 1)]),
+            lambda: _mongo_db.attendance.create_index("timestamp"),
+            lambda: _mongo_db.face_images.create_index("employee_id"),
+        ]:
+            try: idx_fn()
+            except Exception: pass
+        print("MongoDB connected successfully.")
+    except Exception as e:
+        print(f"MongoDB connection error: {e}")
+        _mongo_db = None
+    return _mongo_db
 
-try:
-    db.attendance.create_index("timestamp")
-except Exception as e:
-    print(f"Attendance timestamp index warning: {e}")
+class _MongoProxy:
+    """
+    Transparent proxy for the MongoDB database object.
+    All attribute lookups (db.employees, db.attendance, etc.) are forwarded
+    to the real database, connecting lazily on first use.
+    This means the app never crashes at import time due to DB issues.
+    """
+    def __getattr__(self, name):
+        real = _get_real_db()
+        if real is None:
+            raise RuntimeError(
+                "MongoDB is not connected. Please set the MONGO_URI environment variable."
+            )
+        return getattr(real, name)
 
-try:
-    db.face_images.create_index("employee_id")
-except Exception as e:
-    print(f"Face images index warning: {e}")
+# `db` is now a safe proxy — all existing `db.employees`, `db.attendance` etc.
+# calls in the routes will work exactly as before.
+db = _MongoProxy()
+
+# Eagerly attempt connection on startup (errors are printed, not raised)
+_get_real_db()
 
 # Try to restore the model.pkl from MongoDB asynchronously in the background so it doesn't block server startup
 def restore_model_async():
     try:
-        model_doc = db.models.find_one({"_id": "latest_model"})
+        _db = _get_real_db()
+        if _db is None:
+            print("Skipping model restore - no DB connection.")
+            return
+        model_doc = _db.models.find_one({"_id": "latest_model"})
         if model_doc and "model_bytes" in model_doc:
             with open(MODEL_PATH, "wb") as f:
                 f.write(model_doc["model_bytes"])
@@ -110,7 +144,12 @@ def restore_model_async():
     except Exception as e:
         print(f"Could not restore model from MongoDB in background: {e}")
 
-threading.Thread(target=restore_model_async, daemon=True).start()
+# Only start background threads when NOT on Vercel (serverless - threads don't persist)
+if not IS_VERCEL:
+    threading.Thread(target=restore_model_async, daemon=True).start()
+else:
+    # On Vercel: restore model synchronously at startup (cold start acceptable)
+    restore_model_async()
 
 # ---------- Render Keepalive: Prevent Cold Starts ----------
 def _keepalive_ping():
@@ -132,7 +171,9 @@ def _keepalive_ping():
             print(f"[Keepalive] Ping failed: {e}")
         time.sleep(600)  # Ping every 10 minutes
 
-threading.Thread(target=_keepalive_ping, daemon=True).start()
+# Only run keepalive on Render, not on Vercel (serverless doesn't support background threads)
+if not IS_VERCEL:
+    threading.Thread(target=_keepalive_ping, daemon=True).start()
 
 # Helper for Auto-Incrementing IDs just like SQLite
 def get_next_sequence(counter_name):
@@ -220,8 +261,8 @@ def inject_sidebar_data():
         "sb_role": "Loading...",
         "sb_total_hours": "0.00",
         "sb_regular_hours": "0.00",
-        "sb_rate": "$0.00",
-        "sb_salary": "$0.00",
+        "sb_rate": "₹0.00",
+        "sb_salary": "₹0.00",
         "sb_dept": "Loading...",
         "sb_eid": 0
     }
@@ -233,8 +274,8 @@ def inject_sidebar_data():
                 "sb_role": "Loading...",
                 "sb_total_hours": "0.00",
                 "sb_regular_hours": "0.00",
-                "sb_rate": "$0.00",
-                "sb_salary": "$0.00",
+                "sb_rate": "₹0.00",
+                "sb_salary": "₹0.00",
                 "sb_dept": "Loading...",
                 "sb_eid": int(eid_cookie)
             }
@@ -259,8 +300,17 @@ def index():
 def ping():
     return "pong", 200
 
+
 @app.route("/stream")
 def stream():
+    # Vercel serverless has a 60s max execution timeout - SSE long-lived connections are not supported.
+    # Return a one-shot SSE response with a notice so clients degrade gracefully.
+    if IS_VERCEL:
+        def single_event():
+            yield "event: connected\ndata: {}\n\n"
+            yield 'event: server_notice\ndata: {"message": "Real-time streaming not available on Vercel serverless. Please refresh the page for updates."}\n\n'
+        return Response(single_event(), mimetype="text/event-stream")
+
     def event_stream():
         q = queue.Queue(maxsize=50)
         sse_clients.append(q)
@@ -420,11 +470,16 @@ def upload_face():
             path = os.path.join(folder, fname)
             f.save(path)
             
+            # Extract embedding to store in DB
+            f.seek(0)
+            emb = extract_embedding_for_image(f)
+            
             # Save to MongoDB for persistent backup
             db.face_images.insert_one({
                 "employee_id": int(employee_id),
                 "filename": fname,
                 "image_data": img_bytes,
+                "embedding": emb.tolist() if emb is not None else None,
                 "created_at": datetime.datetime.utcnow().isoformat()
             })
             saved += 1
@@ -435,6 +490,32 @@ def upload_face():
 # -------- Train model --------
 @app.route("/train_model", methods=["GET"])
 def train_model_route():
+    if IS_VERCEL:
+        # On Vercel: run training synchronously in the request thread
+        try:
+            write_train_status({"running": True, "progress": 10, "message": "Synchronizing database face data..."})
+            
+            # Run the optimized training synchronously
+            train_model_background(DATASET_DIR, db, progress_callback=None)
+            
+            write_train_status({"running": False, "progress": 100, "message": "Training complete!"})
+            
+            # Force cached classifier reload
+            from model import load_model_if_exists
+            load_model_if_exists(db)
+            
+            return jsonify({
+                "status": "completed",
+                "message": "Model trained and saved to MongoDB successfully!"
+            }), 200
+        except Exception as e:
+            app.logger.error("Error during inline model training on Vercel: %s", e)
+            write_train_status({"running": False, "progress": 0, "message": f"Training failed: {str(e)}"})
+            return jsonify({
+                "status": "failed",
+                "message": f"Training failed: {str(e)}"
+            }), 500
+
     status = read_train_status()
     if status.get("running"):
         return jsonify({"status": "already_running"}), 202
@@ -545,7 +626,7 @@ def recognize_face():
             return jsonify({"recognized": False, "error": "model not trained"}), 200
         
         pred_label, conf = predict_with_model(clf, emb)
-        if conf < 0.65:
+        if conf < 0.70:
             return jsonify({"recognized": False, "confidence": float(conf)}), 200
         
         # Get accurate employee int ID
@@ -1091,8 +1172,8 @@ def api_sidebar_employee(direction, current_eid):
         "dept": emp.get("department", "N/A") or "N/A",
         "total_hours": f"{total_hours:.2f}",
         "regular_hours": f"{total_hours:.2f} hrs",
-        "rate": f"${rate:.2f}",
-        "salary": f"${salary:.2f}",
+        "rate": f"₹{rate:.2f}",
+        "salary": f"₹{salary:.2f}",
         "eid": target_eid
     })
     resp.headers["Cache-Control"] = "no-cache"

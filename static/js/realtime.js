@@ -13,6 +13,17 @@ document.addEventListener("DOMContentLoaded", () => {
     // Keep-alive heartbeat received
   });
 
+  // Handle server notice to close the SSE connection and prevent infinite reconnection loop on Vercel
+  sse.addEventListener("server_notice", (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      console.log("⚠️ Server notice:", data.message);
+      sse.close();
+    } catch (err) {
+      console.error("Failed to parse server notice:", err);
+    }
+  });
+
   // 2. Handle Attendance Marked Event
   sse.addEventListener("attendance_marked", (event) => {
     try {

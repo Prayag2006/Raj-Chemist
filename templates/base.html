@@ -100,13 +100,13 @@
           </div>
           <div class="col-6">
             <div class="stat-box">
-              <div class="val" id="sidebar_rate">{{ sb_rate|default('$0.00') }}</div>
+              <div class="val" id="sidebar_rate">{{ sb_rate|default('₹0.00') }}</div>
               <div class="key">Hourly Rate</div>
             </div>
           </div>
           <div class="col-6">
             <div class="stat-box">
-              <div class="val" id="sidebar_salary">{{ sb_salary|default('$0.00') }}</div>
+              <div class="val" id="sidebar_salary">{{ sb_salary|default('₹0.00') }}</div>
               <div class="key">Salary</div>
             </div>
           </div>
@@ -150,10 +150,28 @@
   
   <script>
   let currentSidebarEid = {{ sb_eid|default(0) }};
+  
+  function clearSidebarEmployee() {
+      document.getElementById("sidebar_name").innerText = "No Employee";
+      document.getElementById("sidebar_role").innerText = "Admin Dashboard";
+      document.getElementById("sidebar_total_hours").innerText = "0.00";
+      document.getElementById("sidebar_regular_hours").innerText = "0.00 hrs";
+      document.getElementById("sidebar_rate").innerText = "₹0.00";
+      document.getElementById("sidebar_salary").innerText = "₹0.00";
+      document.getElementById("sidebar_dept").innerText = "-";
+      const avatar = document.getElementById("sidebar_avatar");
+      if (avatar) {
+          avatar.src = "https://ui-avatars.com/api/?name=No+Employee&background=random";
+      }
+  }
+
   async function changeSidebarEmployee(direction) {
       try {
           const res = await fetch(`/api/sidebar_employee/${direction}/${currentSidebarEid}`);
-          if (!res.ok) return;
+          if (!res.ok) {
+              clearSidebarEmployee();
+              return;
+          }
           const data = await res.json();
           
           currentSidebarEid = data.eid;
@@ -170,13 +188,16 @@
           // Initials badge was removed from DOM
           
           const avatar = document.getElementById("sidebar_avatar");
-          avatar.onerror = function() {
-              this.onerror = null;
-              this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&background=random`;
-          };
-          avatar.src = `/api/employee_image/${data.eid}`;
+          if (avatar) {
+              avatar.onerror = function() {
+                  this.onerror = null;
+                  this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&background=random`;
+              };
+              avatar.src = `/api/employee_image/${data.eid}`;
+          }
       } catch (e) {
           console.error(e);
+          clearSidebarEmployee();
       }
   }
 
@@ -193,9 +214,13 @@
                   currentSidebarEid = data.eid;
                   document.cookie = "sidebar_eid=" + data.eid + "; path=/; max-age=86400";
                   changeSidebarEmployee("current");
+              } else {
+                  clearSidebarEmployee();
               }
             })
-            .catch(() => {});
+            .catch(() => {
+                clearSidebarEmployee();
+            });
       }
   });
   </script>
