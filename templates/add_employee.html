@@ -27,17 +27,21 @@
             <label class="small fw-bold text-muted">Job Title</label>
             <input class="form-control" name="desig" placeholder="Product Designer">
           </div>
-          <div class="col-md-4">
+          <div class="col-md-3">
             <label class="small fw-bold text-muted">Start Date</label>
             <input class="form-control" type="date" name="joining">
           </div>
-          <div class="col-md-4">
+          <div class="col-md-3">
             <label class="small fw-bold text-muted">Shift Start Time</label>
             <input class="form-control" type="time" name="shift_start" value="09:00">
           </div>
-          <div class="col-md-4">
+          <div class="col-md-3">
             <label class="small fw-bold text-muted">Hourly Rate (₹)</label>
             <input class="form-control" type="number" step="0.01" name="hourly_rate" placeholder="e.g. 25.50">
+          </div>
+          <div class="col-md-3">
+            <label class="small fw-bold text-muted">Passcode (Numeric PIN)</label>
+            <input class="form-control" type="password" inputmode="numeric" pattern="[0-9]+" minlength="4" name="password" placeholder="e.g. 1234" required>
           </div>
         </div>
         

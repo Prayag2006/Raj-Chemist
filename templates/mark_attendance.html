@@ -16,24 +16,32 @@
 {% endif %}
 
 <div class="modern-card">
-  <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4">
+  <!-- Tabs Navigation -->
+  <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4 flex-wrap gap-3">
     <div>
-      <h5 class="mb-0">AI Presence Detection</h5>
-      <p class="small text-muted mb-0">Initiate the workstation camera to begin facial identification stream.</p>
+      <h5 class="mb-0" id="cardTitle">AI Biometric Scanner</h5>
+      <p class="small text-muted mb-0" id="cardDesc">Initiate the workstation camera to begin facial identification stream.</p>
     </div>
-    <div class="d-flex gap-2">
-      <button id="startMarkBtn" class="btn-mock btn-mock-primary" {% if not wifi_allowed %}disabled title="Please connect to Office Wi-Fi to enable"{% endif %}><i class="fa-solid fa-play me-1"></i> Activate</button>
-      <button id="stopMarkBtn" class="btn-mock btn-mock-danger" disabled><i class="fa-solid fa-stop me-1"></i> Terminate</button>
+    <div class="d-flex align-items-center gap-2">
+      <div class="btn-group p-1 bg-light rounded" role="group" style="border: 1px solid #e5e7eb;">
+        <button type="button" id="tabBioBtn" class="btn btn-sm btn-dark px-3" onclick="switchTab('bio')" style="font-size:12px; border-radius:4px;"><i class="fa-solid fa-camera me-1"></i> Biometrics</button>
+        <button type="button" id="tabPinBtn" class="btn btn-sm btn-light text-secondary px-3" onclick="switchTab('pin')" style="font-size:12px; border-radius:4px;"><i class="fa-solid fa-key me-1"></i> PIN Passcode</button>
+      </div>
     </div>
   </div>
 
-  <div class="row g-4">
+  <!-- Bio Scanner Content (default active) -->
+  <div id="bioContent" class="row g-4">
     <div class="col-lg-7 text-center">
       <div class="position-relative rounded shadow-sm overflow-hidden bg-black" style="border: 1px solid #e5e7eb;">
         <video id="markVideo" width="100%" height="auto" style="min-height:350px; transform: scaleX(-1);" autoplay muted></video>
         <div id="scanline" class="scanline"></div>
       </div>
       <div id="markStatus" class="mt-2 badge bg-light text-dark border fw-normal py-2 px-3">Hardware Status: Ready to initialize</div>
+      <div class="d-flex gap-2 justify-content-center mt-3">
+        <button id="startMarkBtn" class="btn-mock btn-mock-primary" {% if not wifi_allowed %}disabled title="Please connect to Office Wi-Fi to enable"{% endif %}><i class="fa-solid fa-play me-1"></i> Activate</button>
+        <button id="stopMarkBtn" class="btn-mock btn-mock-danger" disabled><i class="fa-solid fa-stop me-1"></i> Terminate</button>
+      </div>
     </div>
     
     <div class="col-lg-5">
@@ -41,6 +49,29 @@
       <ul id="recognizedList" class="list-group list-group-flush border rounded" style="max-height:400px; overflow-y:auto; font-size:14px;">
          <li class="list-group-item text-muted text-center py-4">Awaiting check-in data...</li>
       </ul>
+    </div>
+  </div>
+
+  <!-- PIN Passcode Content (hidden by default) -->
+  <div id="pinContent" class="row g-4 d-none justify-content-center">
+    <div class="col-md-6 col-lg-5">
+      <div class="card border p-4 shadow-sm" style="border-radius:10px; background: #fafafa;">
+        <h6 class="fw-bold mb-3 text-center" style="letter-spacing:0.5px; color:var(--color-text-dark);"><i class="fa-solid fa-shield-halved text-primary me-2"></i>Secure PIN Login</h6>
+        <form id="passcodeForm">
+          <div class="mb-3">
+            <label class="small fw-bold text-muted mb-1">Select Employee</label>
+            <select class="form-select form-control" id="employeeSelect" name="employee_id" required>
+              <option value="" disabled selected>Choose your profile...</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="small fw-bold text-muted mb-1">Enter Passcode / PIN</label>
+            <input type="password" inputmode="numeric" pattern="[0-9]+" minlength="4" class="form-control text-center fs-4 fw-bold" id="pinInput" name="password" placeholder="••••" required style="letter-spacing: 0.3em;">
+          </div>
+          <div id="pinMsg" class="alert alert-danger d-none py-2 text-center small" role="alert"></div>
+          <button type="submit" class="btn btn-dark w-100 py-2" style="font-size: 13px; border-radius: 4px; font-weight:600;"><i class="fa-solid fa-fingerprint me-2"></i>Verify & Mark Attendance</button>
+        </form>
+      </div>
     </div>
   </div>
 </div>
@@ -67,5 +98,106 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script>
+  function switchTab(tab) {
+      const bioBtn = document.getElementById("tabBioBtn");
+      const pinBtn = document.getElementById("tabPinBtn");
+      const bioContent = document.getElementById("bioContent");
+      const pinContent = document.getElementById("pinContent");
+      const cardTitle = document.getElementById("cardTitle");
+      const cardDesc = document.getElementById("cardDesc");
+
+      if (tab === 'bio') {
+          // Switch button styles
+          bioBtn.className = "btn btn-sm btn-dark px-3";
+          pinBtn.className = "btn btn-sm btn-light text-secondary px-3";
+          // Switch content
+          bioContent.classList.remove("d-none");
+          pinContent.classList.add("d-none");
+          // Change headings
+          cardTitle.innerText = "AI Biometric Scanner";
+          cardDesc.innerText = "Initiate the workstation camera to begin facial identification stream.";
+      } else {
+          // Switch button styles
+          bioBtn.className = "btn btn-sm btn-light text-secondary px-3";
+          pinBtn.className = "btn btn-sm btn-dark px-3";
+          // Switch content
+          bioContent.classList.add("d-none");
+          pinContent.classList.remove("d-none");
+          // Change headings
+          cardTitle.innerText = "PIN Authentication";
+          cardDesc.innerText = "Enter your passcode to securely record check-in/out timestamps.";
+          // Stop camera if running
+          if (typeof stopCamera === "function") {
+              stopCamera("Camera stopped for PIN entry");
+          }
+          // Fetch employees list to populate dropdown if empty
+          populateEmployeeDropdown();
+      }
+  }
+
+  let dropdownPopulated = false;
+  async function populateEmployeeDropdown() {
+      if (dropdownPopulated) return;
+      try {
+          const res = await fetch('/employees');
+          if (res.ok) {
+              const data = await res.json();
+              const select = document.getElementById("employeeSelect");
+              // Clear previous dynamic options except the default
+              select.innerHTML = '<option value="" disabled selected>Choose your profile...</option>';
+              data.employees.forEach(emp => {
+                  const opt = document.createElement("option");
+                  opt.value = emp.id;
+                  opt.innerText = `${emp.name} (#${emp.emp_id})`;
+                  select.appendChild(opt);
+              });
+              dropdownPopulated = true;
+          }
+      } catch (err) {
+          console.error("Failed to load employees list for passcode dropdown:", err);
+      }
+  }
+
+  document.getElementById("passcodeForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const fd = new FormData(form);
+      const msgDiv = document.getElementById("pinMsg");
+      msgDiv.classList.add("d-none");
+
+      try {
+          const res = await fetch("/mark_attendance_passcode", {
+              method: "POST",
+              body: fd
+          });
+          const data = await res.json();
+
+          if (res.ok && data.success) {
+              const statusText = data.status || "Check In";
+              let greeting = "";
+              if (statusText === "Check In" || statusText === "Late Check In") {
+                  greeting = `Welcome, ${data.name}! 👋`;
+              } else if (statusText === "Check Out") {
+                  greeting = `Goodbye, ${data.name}! 🚪`;
+              } else {
+                  greeting = `${data.name}: ${statusText}`;
+              }
+              
+              alert(greeting);
+              // Clear form
+              form.reset();
+              // Refresh page to show new logs/updates
+              window.location.reload();
+          } else {
+              msgDiv.innerText = data.error || "Authentication failed.";
+              msgDiv.classList.remove("d-none");
+          }
+      } catch (err) {
+          msgDiv.innerText = "Network error. Please try again.";
+          msgDiv.classList.remove("d-none");
+      }
+  });
+</script>
 <script src="{{ url_for('static', filename='js/camera_mark.js') }}"></script>
 {% endblock %}

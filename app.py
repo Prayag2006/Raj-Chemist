@@ -428,6 +428,7 @@ def add_employee():
         numeric_id = get_next_sequence("employee_id_seq")
         now = datetime.datetime.now().isoformat()
         
+        password = data.get("password", "").strip()
         db.employees.insert_one({
             "id": numeric_id,
             "name": name,
@@ -437,6 +438,7 @@ def add_employee():
             "joining_date": joining,
             "shift_start": shift_start,
             "hourly_rate": hourly_rate,
+            "password": password,
             "created_at": now
         })
         
@@ -715,6 +717,118 @@ def recognize_face():
         app.logger.exception("recognize error")
         return jsonify({"recognized": False, "error": str(e)}), 500
 
+# -------- Recognize face via Passcode endpoint --------
+@app.route("/mark_attendance_passcode", methods=["POST"])
+def mark_attendance_passcode():
+    client_ip = request.remote_addr
+    if request.headers.getlist("X-Forwarded-For"):
+        client_ip = request.headers.getlist("X-Forwarded-For")[0]
+        
+    if client_ip and "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    # Normalize IP prefix
+    if client_ip and client_ip.startswith("::ffff:"):
+        client_ip = client_ip[7:]
+        
+    allowed, message = check_wifi_access(client_ip)
+    if not allowed:
+        return jsonify({"success": False, "error": message}), 403
+
+    employee_id = request.form.get("employee_id")
+    password = request.form.get("password", "").strip()
+
+    if not employee_id or not password:
+        return jsonify({"success": False, "error": "Employee selection and PIN are required."}), 400
+
+    try:
+        numeric_eid = int(employee_id)
+        employee = db.employees.find_one({"id": numeric_eid})
+        if not employee:
+            return jsonify({"success": False, "error": "Employee not found."}), 404
+            
+        stored_password = employee.get("password", "").strip()
+        if stored_password != password:
+            return jsonify({"success": False, "error": "Invalid PIN/Passcode. Please try again."}), 401
+            
+        name = employee["name"]
+
+        # -- COOLDOWN & ALTERNATE LOGIC --
+        last_rec = db.attendance.find_one(
+            {"employee_id": numeric_eid},
+            sort=[("timestamp", -1)]
+        )
+        
+        IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
+        now_local = now_dt.astimezone(IST)
+        next_status = "Check In"
+        
+        if last_rec:
+            last_ts_str = last_rec.get("timestamp")
+            last_status = last_rec.get("status", "Check In")
+            try:
+                last_dt = parse_dt(last_ts_str)
+                if last_dt:
+                    delta = (now_dt - last_dt).total_seconds()
+                    if delta < 60:
+                        return jsonify({"success": True, "employee_id": numeric_eid, "name": name, "status": "Debounced (Wait 1 min)"}), 200
+                    next_status = "Check Out" if last_status in ["Check In", "Late Check In"] else "Check In"
+            except:
+                pass
+
+        # Calculate if late (Only apply to the FIRST attendance of the day in IST)
+        if next_status == "Check In":
+            start_of_today_ist = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_today_ist = start_of_today_ist + datetime.timedelta(days=1)
+            
+            # Fetch recent logs to robustly scan for today's attendance regardless of offsets in DB
+            recent_logs = list(db.attendance.find({"employee_id": numeric_eid}).sort("timestamp", -1).limit(10))
+            
+            has_attendance_today = False
+            for log in recent_logs:
+                log_dt = parse_dt(log.get("timestamp"))
+                if log_dt:
+                    log_dt_local = log_dt.astimezone(IST)
+                    if start_of_today_ist <= log_dt_local < end_of_today_ist:
+                        has_attendance_today = True
+                        break
+            
+            if not has_attendance_today: # First time attending today
+                shift_start_str = employee.get("shift_start", "09:00")
+                try:
+                    h, m = map(int, shift_start_str.split(':'))
+                    expected_time = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
+                    grace_time = expected_time + datetime.timedelta(minutes=15)
+                    if now_local > grace_time:
+                        next_status = "Late Check In"
+                except:
+                    pass
+
+        ts = now_dt.isoformat()
+        attendance_id = get_next_sequence("attendance_id_seq")
+        db.attendance.insert_one({
+            "id": attendance_id,
+            "employee_id": numeric_eid,
+            "name": name,
+            "timestamp": ts,
+            "status": next_status
+        })
+        
+        # Broadcast real-time attendance marked event
+        broadcast_sse("attendance_marked", {
+            "id": int(attendance_id),
+            "employee_id": int(numeric_eid),
+            "name": name,
+            "timestamp": ts,
+            "status": next_status
+        })
+        
+        return jsonify({"success": True, "employee_id": numeric_eid, "name": name, "status": next_status}), 200
+    except Exception as e:
+        app.logger.exception("passcode recognize error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # -------- Attendance records & filters --------
 @app.route("/attendance_record", methods=["GET"])
 def attendance_record():
@@ -827,7 +941,8 @@ def update_employee():
         "designation": request.form.get("designation", "").strip(),
         "joining_date": request.form.get("joining_date", ""),
         "shift_start": request.form.get("shift_start", "09:00").strip(),
-        "hourly_rate": hourly_rate
+        "hourly_rate": hourly_rate,
+        "password": request.form.get("password", "").strip()
     }
     
     db.employees.update_one({"id": int(eid)}, {"$set": update_data})
