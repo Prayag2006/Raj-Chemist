@@ -18,17 +18,26 @@ face_cascade_alt = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fr
 face_cascade_profile = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
 def detect_faces_robust(gray, min_size_val):
-    # 1. Try frontal default - optimized scaleFactor (1.3) and minNeighbors (4) for instant response
-    faces = face_cascade_default.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
-    if len(faces) > 0:
-        return faces
-    # 2. Try frontal alt - optimized fallback for tilted heads
-    faces = face_cascade_alt.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
-    if len(faces) > 0:
-        return faces
-    # 3. Try profile side-view fallback for side profiles
-    faces = face_cascade_profile.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=4, minSize=(min_size_val, min_size_val))
-    return faces
+    """Try many cascade + parameter combos to maximize detection rate."""
+    configs = [
+        (face_cascade_default, 1.3, 4),
+        (face_cascade_default, 1.2, 3),
+        (face_cascade_default, 1.15, 3),
+        (face_cascade_default, 1.1,  3),
+        (face_cascade_alt,     1.3, 4),
+        (face_cascade_alt,     1.2, 3),
+        (face_cascade_alt,     1.15, 3),
+        (face_cascade_profile, 1.3, 3),
+        (face_cascade_profile, 1.2, 3),
+        (face_cascade_default, 1.3, 2),   # more lenient
+        (face_cascade_alt,     1.3, 2),
+    ]
+    for cascade, sf, mn in configs:
+        faces = cascade.detectMultiScale(gray, scaleFactor=sf, minNeighbors=mn,
+                                         minSize=(min_size_val, min_size_val))
+        if len(faces) > 0:
+            return faces
+    return []
 
 
 # ---- Utility: extract face crop -> robust LBP spatial histogram vector ----
@@ -86,29 +95,22 @@ def extract_embedding_for_image(stream_or_bytes):
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         return None
-    
-    # Speed up face detection by downscaling the detection image
     h, w = img.shape[:2]
-    scale = 1.0
-    if w > 240:
-        scale = 240.0 / w
-        detect_img = cv2.resize(img, (240, int(h * scale)), interpolation=cv2.INTER_AREA)
-    else:
-        detect_img = img
-        
-    gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
-    min_size_val = int(30 * scale)
-    faces = detect_faces_robust(gray, min_size_val)
-    if len(faces) == 0:
-        return None
-    
-    # take largest face and map coordinates back
-    largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-    (x, y, fw, fh) = largest_face
-    bbox = (int(x / scale), int(y / scale), int(fw / scale), int(fh / scale))
-    
-    emb = crop_face_and_embed(img, bbox)
-    return emb
+    # Try multiple detection widths to maximize success
+    for target_w in [240, 180, 320, 160]:
+        scale = float(target_w) / w if w > 0 else 1.0
+        detect_img = cv2.resize(img, (target_w, max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(detect_img, cv2.COLOR_BGR2GRAY)
+        min_size = max(5, int(30 * scale))
+        faces = detect_faces_robust(gray, min_size)
+        if len(faces) > 0:
+            largest = max(faces, key=lambda r: r[2]*r[3])
+            (x, y, fw, fh) = largest
+            bbox = (int(x/scale), int(y/scale), int(fw/scale), int(fh/scale))
+            emb = crop_face_and_embed(img, bbox)
+            if emb is not None:
+                return emb
+    return None
 
 # ---- Load model helpers ----
 _cached_clf = None
@@ -346,7 +348,7 @@ def train_model_background(dataset_dir, db=None, progress_callback=None):
         # fit RandomForest
         if progress_callback:
             progress_callback(85, "Training RandomForest...")
-        clf = RandomForestClassifier(n_estimators=200, n_jobs=-1, random_state=42)
+        clf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42)
         clf.fit(X, y)
 
         # Calculate and store centroids for each class to compute absolute similarity later
