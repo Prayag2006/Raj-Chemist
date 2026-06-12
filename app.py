@@ -4,7 +4,7 @@ import queue
 import threading
 import datetime
 import json
-from flask import Flask, render_template, request, jsonify, send_file, abort, Response
+from flask import Flask, render_template, request, jsonify, send_file, abort, Response, session, redirect, url_for
 from model import train_model_background, extract_embedding_for_image, MODEL_PATH
 
 # --- MONGODB IMPORTS ---
@@ -72,6 +72,7 @@ else:
     TRAIN_STATUS_FILE = os.path.join(APP_DIR, "train_status.json")
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super-secret-admin-key-raj-chemist")
 
 # ---------- MongoDB Setup (Crash-safe for Vercel) ----------
 # Reads MONGO_URI from environment - REQUIRED on Vercel, defaults to local for dev.
@@ -282,6 +283,47 @@ def inject_sidebar_data():
         return default_sb
     except Exception:
         return default_sb
+
+# ---------- Auth Middleware & Admin Login/Logout ----------
+@app.before_request
+def check_admin_auth():
+    exempt_routes = [
+        'mark_attendance_page', 
+        'recognize_face', 
+        'mark_attendance_passcode', 
+        'stream', 
+        'ping', 
+        'api_employee_image',
+        'api_sidebar_employee',
+        'api_first_employee',
+        'login', 
+        'logout',
+        'static'
+    ]
+    if not request.endpoint:
+        return
+    if request.endpoint in exempt_routes:
+        return
+    if not session.get("admin_logged_in"):
+        return redirect(url_for("login"))
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password == "Raj@4044":
+            session["admin_logged_in"] = True
+            return redirect(url_for("index"))
+        else:
+            return render_template("login.html", error="Invalid Password. Please try again.")
+    if session.get("admin_logged_in"):
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.pop("admin_logged_in", None)
+    return redirect(url_for("login"))
 
 # ---------- Routes ----------
 import traceback
